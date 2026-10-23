@@ -1,0 +1,364 @@
+/* Structural styles for the Milkdown editor so it renders like Typora's #write.
+   Typography and colors live in the theme files. */
+
+#write .milkdown {
+  position: relative;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+#write .ProseMirror {
+  outline: none;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  caret-color: var(--text-color);
+}
+
+#write .ProseMirror ::selection {
+  background: var(--select-text-bg-color);
+}
+
+/* ------------------------------------------------- Typora syntax reveal */
+
+.md-meta {
+  color: var(--md-meta-color);
+  font-weight: normal;
+  font-style: normal;
+  text-decoration: none;
+  font-family: inherit;
+  white-space: pre;
+}
+
+.md-search-hit {
+  background: var(--search-hit-bg);
+  border-radius: 2px;
+}
+
+.md-search-current {
+  background: var(--search-current-bg);
+}
+
+/* -------------------------------------------------------- front matter */
+
+.front-matter-host {
+  margin-bottom: 0;
+}
+
+.md-front-matter {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 14px 17px;
+  overflow: hidden;
+  resize: none;
+  border: 0;
+  border-radius: 4px;
+  outline: none;
+  background: var(--front-matter-bg);
+  color: var(--front-matter-color);
+  font-family: var(--monospace);
+  font-size: 0.9em;
+  line-height: 1.45;
+}
+
+/* --------------------------------------------------------------- lists */
+
+/* Block layout (not Crepe's flex) so paragraph margins collapse across items
+   exactly like Typora's <li><p> lists; the marker hangs in the list's indent. */
+#write .milkdown-list-item-block > .list-item {
+  display: block;
+  position: relative;
+  padding: 0;
+}
+
+#write .milkdown-list-item-block .content-dom > p {
+  margin: 7px 0;
+}
+
+#write .milkdown-list-item-block .label-wrapper {
+  position: absolute;
+  top: 0;
+  left: -24px;
+  width: 24px;
+  height: calc(var(--base-font-size) * var(--line-height));
+  padding-right: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
+}
+
+#write .milkdown-list-item-block .label-wrapper .label {
+  height: auto;
+  width: auto;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#write .milkdown-list-item-block .label-wrapper .label.ordered {
+  width: 100%;
+  justify-content: flex-end;
+  margin-right: 4px;
+}
+
+.md-bullet {
+  display: block;
+  width: 5.5px;
+  height: 5.5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* Nested bullets: disc → circle → square, as in browsers / Typora. */
+#write .milkdown-list-item-block .milkdown-list-item-block .md-bullet {
+  background: transparent;
+  border: 1px solid currentColor;
+}
+
+#write .milkdown-list-item-block .milkdown-list-item-block .milkdown-list-item-block .md-bullet {
+  border-radius: 0;
+  background: currentColor;
+  border: 0;
+}
+
+.md-task-box {
+  display: block;
+  width: 13px;
+  height: 13px;
+  border: 1px solid var(--task-box-border);
+  border-radius: 3.5px;
+  background: var(--task-box-bg);
+  position: relative;
+  cursor: pointer;
+}
+
+.md-task-box.checked {
+  background: var(--task-box-checked);
+  border-color: var(--task-box-checked);
+}
+
+.md-task-box.checked::after {
+  content: '';
+  position: absolute;
+  left: 3.6px;
+  top: 1.2px;
+  width: 3.4px;
+  height: 6.6px;
+  border: solid #fff;
+  border-width: 0 1.6px 1.6px 0;
+  transform: rotate(42deg);
+}
+
+/* ---------------------------------------------------------- code fences */
+
+#write .milkdown-code-block {
+  position: relative;
+  padding: 8px 4px 6px;
+  margin: 15px 0;
+  border: 1px solid var(--code-border-color);
+  border-radius: 3px;
+  background: var(--code-bg-color);
+  font-family: var(--monospace);
+}
+
+#write .milkdown-code-block.selected {
+  outline: none;
+}
+
+#write .milkdown-code-block .cm-editor {
+  background: transparent;
+  font-size: 0.9em;
+}
+
+#write .milkdown-code-block .cm-scroller {
+  font-family: var(--monospace);
+  line-height: 1.6;
+}
+
+#write .milkdown-code-block .cm-content {
+  padding: 0;
+}
+
+#write .milkdown-code-block .cm-line {
+  padding: 0 8px;
+}
+
+#write .milkdown-code-block .cm-gutters {
+  display: none;
+}
+
+/* The language picker sits in the bottom-right corner and appears only while editing. */
+#write .milkdown-code-block .tools {
+  position: absolute;
+  right: 4px;
+  bottom: -26px;
+  z-index: 2;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+#write .milkdown-code-block:focus-within .tools,
+#write .milkdown-code-block .tools:has([data-expanded='true']) {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+#write .milkdown-code-block .tools .language-button,
+#write .milkdown-code-block .tools .tools-button-group button {
+  opacity: 1;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 3px;
+  background: var(--bg-color);
+  color: var(--meta-text-color);
+  border: 1px solid var(--code-border-color);
+  font: 12px var(--ui-font);
+}
+
+#write .milkdown-code-block .list-wrapper {
+  font-family: var(--ui-font);
+  background: var(--popover-bg-color);
+  color: var(--text-color);
+  border-radius: 6px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+}
+
+#write .milkdown-code-block .preview-panel {
+  font-family: var(--ui-font);
+}
+
+#write .milkdown-code-block .preview-panel .preview-divider,
+#write .milkdown-code-block .preview-panel .preview-label {
+  display: none;
+}
+
+/* --------------------------------------------------------------- tables */
+
+#write .milkdown-table-block {
+  margin: 0.8em 0;
+}
+
+#write .milkdown-table-block table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+#write .milkdown-table-block th,
+#write .milkdown-table-block td {
+  padding: 6px 13px;
+  border: 1px solid var(--table-border-color);
+}
+
+#write .milkdown-table-block th p,
+#write .milkdown-table-block td p {
+  margin: 0;
+}
+
+/* Row / column handles only while working on the table, never at rest. */
+#write .milkdown-table-block .handle {
+  opacity: 0;
+}
+
+#write .milkdown-table-block:hover .handle,
+#write .milkdown-table-block:focus-within .handle {
+  opacity: 0.85;
+}
+
+/* ---------------------------------------------------------------- math */
+
+#write .milkdown-code-block:has(.preview-panel) {
+  background: transparent;
+  border-color: transparent;
+}
+
+#write .milkdown-code-block:has(.preview-panel):focus-within {
+  border-color: var(--code-border-color);
+  background: var(--code-bg-color);
+}
+
+#write .milkdown-code-block .preview {
+  text-align: center;
+  padding: 6px 0;
+}
+
+/* ---------------------------------------------------------- focus mode */
+
+.focus-mode #write .ProseMirror > * {
+  opacity: 0.3;
+  transition: opacity 0.2s ease;
+}
+
+.focus-mode #write .ProseMirror > .md-focus,
+.focus-mode #write .ProseMirror:not(:focus-within) > * {
+  opacity: 1;
+}
+
+.typewriter-mode .write {
+  padding-bottom: 50vh;
+}
+
+/* --------------------------------------------------------- source mode */
+
+.source {
+  zoom: var(--zoom);
+  max-width: var(--write-max-width);
+  margin: 0 auto;
+  padding: 30px 30px 100px;
+}
+
+.source .cm-editor {
+  height: auto;
+  background: transparent;
+  color: var(--text-color);
+  font-size: calc(var(--base-font-size) * 0.95);
+}
+
+.source .cm-editor.cm-focused {
+  outline: none;
+}
+
+.source .cm-scroller {
+  overflow: visible;
+  font-family: var(--monospace);
+  line-height: 1.6;
+}
+
+.source .cm-content {
+  caret-color: var(--text-color);
+}
+
+.source .cm-cursor {
+  border-left-color: var(--text-color);
+}
+
+.source .cm-activeLine {
+  background: transparent;
+}
+
+.source .cm-selectionBackground,
+.source .cm-focused .cm-selectionBackground {
+  background: var(--select-text-bg-color) !important;
+}
+
+.source .cm-panels {
+  background: var(--bg-color);
+  color: var(--text-color);
+  border-color: var(--sidebar-border-color);
+  font-family: var(--ui-font);
+}
+
+@media print {
+  .md-meta {
+    display: none;
+  }
+
+  .focus-mode #write .ProseMirror > * {
+    opacity: 1 !important;
+  }
+}

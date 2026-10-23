@@ -1,0 +1,194 @@
+/* Github — the default theme. Values measured from Typora's default look:
+   16px Open Sans at 1.6, #333 text, #eee heading rules, #f8f8f8 code fences. */
+
+:root,
+:root[data-theme='github'] {
+  color-scheme: light;
+  --line-height: 1.6;
+  --bg-color: #ffffff;
+  --text-color: #333333;
+  --heading-color: #333333;
+  --accent-color: #2f7cf6;
+  --link-color: #4183c4;
+  --md-meta-color: #b4b4b4;
+  --select-text-bg-color: #b5d6fc;
+  --search-hit-bg: rgba(255, 213, 0, 0.35);
+  --search-current-bg: #ffb300;
+
+  --title-color: #595959;
+  --title-blurred-color: #b7b7b7;
+  --side-bar-bg-color: #fafafa;
+  --sidebar-border-color: #e8e8e8;
+  --sidebar-separator-color: #ececec;
+  --sidebar-title-color: #333333;
+  --control-text-color: #333333;
+  --meta-text-color: #aaaaaa;
+  --article-name-color: #555555;
+  --article-ext-color: #d0d0d0;
+  --excerpt-color: #777777;
+  --item-hover-bg-color: rgba(0, 0, 0, 0.04);
+  --active-file-bg-color: #eeeeee;
+  --active-file-text-color: inherit;
+  --footer-text-color: #999999;
+  --popover-bg-color: #ffffff;
+
+  --code-bg-color: #f8f8f8;
+  --code-border-color: #e7eaed;
+  --code-fg: #333333;
+  --inline-code-bg: #f3f4f4;
+  --inline-code-border: #e7eaed;
+  --front-matter-bg: #f7f7f7;
+  --front-matter-color: #777777;
+  --table-border-color: #dfe2e5;
+  --table-stripe-bg: #f8f8f8;
+  --quote-border-color: #dfe2e5;
+  --quote-color: #777777;
+  --hr-color: #e7e7e7;
+  --task-box-border: #b7b7b7;
+  --task-box-bg: #ffffff;
+  --task-box-checked: #007aff;
+
+  /* Classic CodeMirror palette */
+  --cm-keyword: #770088;
+  --cm-atom: #221199;
+  --cm-number: #116644;
+  --cm-def: #0000ff;
+  --cm-variable: #000000;
+  --cm-variable-2: #0055aa;
+  --cm-variable-3: #008855;
+  --cm-property: #000000;
+  --cm-operator: #333333;
+  --cm-comment: #aa5500;
+  --cm-string: #aa1111;
+  --cm-string-2: #ff5500;
+  --cm-meta: #555555;
+  --cm-tag: #117700;
+  --cm-attribute: #0000cc;
+  --cm-link: #0000cc;
+  --cm-header: #0000ff;
+  --cm-error: #ff0000;
+}
+
+#write {
+  font-family: 'Open Sans', 'Clear Sans', 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  font-size: var(--base-font-size);
+  line-height: var(--line-height);
+  color: var(--text-color);
+}
+
+#write h1,
+#write h2,
+#write h3,
+#write h4,
+#write h5,
+#write h6 {
+  position: relative;
+  margin: 1rem 0;
+  padding: 0;
+  font-weight: bold;
+  line-height: 1.4;
+  color: var(--heading-color);
+}
+
+#write h1 {
+  font-size: 2.25em;
+  line-height: 1.2;
+  border-bottom: 1px solid #eee;
+}
+
+#write h2 {
+  font-size: 1.75em;
+  line-height: 1.225;
+  border-bottom: 1px solid #eee;
+}
+
+#write h3 {
+  font-size: 1.5em;
+  line-height: 1.43;
+}
+
+#write h4 {
+  font-size: 1.25em;
+}
+
+#write h5 {
+  font-size: 1em;
+}
+
+#write h6 {
+  font-size: 1em;
+  color: #777;
+}
+
+#write p,
+#write blockquote,
+#write ul,
+#write ol,
+#write table {
+  margin: 0.8em 0;
+}
+
+#write ul,
+#write ol {
+  padding-left: 31px;
+}
+
+#write ul ul,
+#write ol ol,
+#write ul ol,
+#write ol ul {
+  margin: 0;
+}
+
+#write a {
+  color: var(--link-color);
+  text-decoration: underline;
+}
+
+#write strong {
+  font-weight: bold;
+}
+
+#write blockquote {
+  padding: 0 15px;
+  border-left: 4px solid var(--quote-border-color);
+  color: var(--quote-color);
+}
+
+#write blockquote > :first-child {
+  margin-top: 0;
+}
+
+#write blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+#write code {
+  padding: 0 2px;
+  border: 1px solid var(--inline-code-border);
+  border-radius: 3px;
+  background: var(--inline-code-bg);
+  font-family: var(--monospace);
+  font-size: 0.9em;
+}
+
+#write hr {
+  height: 2px;
+  padding: 0;
+  margin: 16px 0;
+  border: 0;
+  background: var(--hr-color);
+}
+
+#write img {
+  max-width: 100%;
+}
+
+/* The editor renders the header row as the first <tr>, so header + even body rows are odd children. */
+#write table tr:nth-child(2n + 1) {
+  background: var(--table-stripe-bg);
+}
+
+#write table th {
+  font-weight: bold;
+}

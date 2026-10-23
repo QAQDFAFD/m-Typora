@@ -1,0 +1,67 @@
+/* Newsprint — warm paper, serif type, centered display headings. */
+
+:root[data-theme='newsprint'] {
+  --line-height: 1.5;
+  --bg-color: #f3f2ee;
+  --text-color: #1f0909;
+  --heading-color: #1f0909;
+  --link-color: #065588;
+  --md-meta-color: #a8a49a;
+  --select-text-bg-color: #d8d2bf;
+
+  --side-bar-bg-color: #ebeae5;
+  --sidebar-border-color: #dcdad3;
+  --sidebar-separator-color: #e0ded7;
+  --active-file-bg-color: #dedcd4;
+  --popover-bg-color: #f8f7f4;
+
+  --code-bg-color: #ebe9e2;
+  --code-border-color: #dcdad3;
+  --inline-code-bg: #e8e6df;
+  --inline-code-border: #dcdad3;
+  --front-matter-bg: #ebe9e2;
+  --table-border-color: #cfccc3;
+  --table-stripe-bg: #ebe9e2;
+  --quote-border-color: #c9c5b8;
+  --quote-color: #5a4b4b;
+  --hr-color: #cfccc3;
+}
+
+:root[data-theme='newsprint'] #write {
+  font-family: 'PT Serif', 'Times New Roman', Times, 'Songti SC', serif;
+  font-size: calc(var(--base-font-size) * 1.05);
+}
+
+:root[data-theme='newsprint'] #write h1,
+:root[data-theme='newsprint'] #write h2,
+:root[data-theme='newsprint'] #write h3 {
+  font-weight: normal;
+  border-bottom: 0;
+  text-align: center;
+}
+
+:root[data-theme='newsprint'] #write h1 {
+  font-size: 2.4em;
+  letter-spacing: -0.01em;
+}
+
+:root[data-theme='newsprint'] #write h2 {
+  font-size: 1.8em;
+}
+
+:root[data-theme='newsprint'] #write h3 {
+  font-size: 1.4em;
+  font-style: italic;
+}
+
+:root[data-theme='newsprint'] #write h4,
+:root[data-theme='newsprint'] #write h5,
+:root[data-theme='newsprint'] #write h6 {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.95em;
+}
+
+:root[data-theme='newsprint'] #write blockquote {
+  font-style: italic;
+}

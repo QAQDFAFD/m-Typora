@@ -1,0 +1,46 @@
+/* Pixyll — airy layout, serif body with clean sans-serif headings and generous size. */
+
+:root[data-theme='pixyll'] {
+  --line-height: 1.75;
+  --text-color: #333333;
+  --link-color: #463f5c;
+  --md-meta-color: #bbbbbb;
+  --quote-border-color: #463f5c;
+  --quote-color: #666666;
+}
+
+:root[data-theme='pixyll'] #write {
+  font-family: Merriweather, Georgia, Cambria, 'Times New Roman', 'Songti SC', serif;
+  font-size: calc(var(--base-font-size) * 1.125);
+}
+
+:root[data-theme='pixyll'] #write h1,
+:root[data-theme='pixyll'] #write h2,
+:root[data-theme='pixyll'] #write h3,
+:root[data-theme='pixyll'] #write h4,
+:root[data-theme='pixyll'] #write h5,
+:root[data-theme='pixyll'] #write h6 {
+  font-family: Lato, 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', sans-serif;
+  font-weight: 700;
+  border-bottom: 0;
+  margin-top: 1.4em;
+}
+
+:root[data-theme='pixyll'] #write h1 {
+  font-size: 2.6em;
+  line-height: 1.15;
+}
+
+:root[data-theme='pixyll'] #write h2 {
+  font-size: 1.9em;
+}
+
+:root[data-theme='pixyll'] #write blockquote {
+  border-left-width: 6px;
+  font-style: italic;
+}
+
+:root[data-theme='pixyll'] #write a {
+  text-decoration: none;
+  border-bottom: 1px solid currentColor;
+}

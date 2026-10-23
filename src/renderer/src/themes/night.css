@@ -1,0 +1,79 @@
+/* Night — a dark slate theme with soft grey text and a darker sidebar. */
+
+:root[data-theme='night'] {
+  color-scheme: dark;
+  --bg-color: #363b40;
+  --text-color: #b8bfc6;
+  --heading-color: #dedede;
+  --accent-color: #5c9df5;
+  --link-color: #e0e0e0;
+  --md-meta-color: #6f777e;
+  --select-text-bg-color: #4a89dc;
+  --search-hit-bg: rgba(255, 213, 0, 0.25);
+  --search-current-bg: rgba(255, 179, 0, 0.6);
+
+  --title-color: #b8bfc6;
+  --title-blurred-color: #6f777e;
+  --side-bar-bg-color: #2e3033;
+  --sidebar-border-color: #23262a;
+  --sidebar-separator-color: #3a3d42;
+  --sidebar-title-color: #dedede;
+  --control-text-color: #b8bfc6;
+  --meta-text-color: #6f777e;
+  --article-name-color: #dedede;
+  --article-ext-color: #5d646b;
+  --excerpt-color: #8b9299;
+  --item-hover-bg-color: rgba(255, 255, 255, 0.05);
+  --active-file-bg-color: #43474c;
+  --active-file-text-color: #f0f0f0;
+  --footer-text-color: #7a8188;
+  --popover-bg-color: #2e3033;
+
+  --code-bg-color: #333539;
+  --code-border-color: #2a2c30;
+  --code-fg: #b8bfc6;
+  --inline-code-bg: #4a4f56;
+  --inline-code-border: #4a4f56;
+  --front-matter-bg: #2f3236;
+  --front-matter-color: #8b9299;
+  --table-border-color: #4a4f56;
+  --table-stripe-bg: #3b4046;
+  --quote-border-color: #4a4f56;
+  --quote-color: #9da5ad;
+  --hr-color: #4a4f56;
+  --task-box-border: #6f777e;
+  --task-box-bg: #2e3033;
+  --task-box-checked: #4a89dc;
+
+  --cm-keyword: #c991e1;
+  --cm-atom: #f99157;
+  --cm-number: #f99157;
+  --cm-def: #82aaff;
+  --cm-variable: #d4d7dc;
+  --cm-variable-2: #89ddff;
+  --cm-variable-3: #ffcb6b;
+  --cm-property: #82aaff;
+  --cm-operator: #89ddff;
+  --cm-comment: #737c84;
+  --cm-string: #c3e88d;
+  --cm-string-2: #f78c6c;
+  --cm-meta: #8b9299;
+  --cm-tag: #f07178;
+  --cm-attribute: #c991e1;
+  --cm-link: #82aaff;
+  --cm-header: #82aaff;
+  --cm-error: #ff5370;
+}
+
+:root[data-theme='night'] #write h1,
+:root[data-theme='night'] #write h2 {
+  border-bottom-color: #474d54;
+}
+
+:root[data-theme='night'] #write h6 {
+  color: #8b9299;
+}
+
+:root[data-theme='night'] #write strong {
+  color: #e0e0e0;
+}

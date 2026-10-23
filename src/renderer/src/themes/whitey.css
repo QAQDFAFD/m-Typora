@@ -1,0 +1,46 @@
+/* Whitey — book-like: old-style serif, light display headings, lots of white. */
+
+:root[data-theme='whitey'] {
+  --line-height: 1.6;
+  --text-color: #2b2b2b;
+  --heading-color: #222222;
+  --link-color: #2b2b2b;
+  --md-meta-color: #c2c2c2;
+  --side-bar-bg-color: #ffffff;
+  --quote-border-color: #e4e4e4;
+  --quote-color: #8a8a8a;
+  --hr-color: #eeeeee;
+}
+
+:root[data-theme='whitey'] #write {
+  font-family: Vollkorn, Palatino, 'Palatino Linotype', 'Book Antiqua', Georgia, 'Songti SC', serif;
+  font-size: calc(var(--base-font-size) * 1.15);
+}
+
+:root[data-theme='whitey'] #write h1,
+:root[data-theme='whitey'] #write h2,
+:root[data-theme='whitey'] #write h3 {
+  font-weight: normal;
+  border-bottom: 0;
+}
+
+:root[data-theme='whitey'] #write h1 {
+  font-size: 2.6em;
+  text-align: center;
+  margin: 1em 0;
+}
+
+:root[data-theme='whitey'] #write h2 {
+  font-size: 1.8em;
+  font-variant: small-caps;
+}
+
+:root[data-theme='whitey'] #write a {
+  text-decoration-color: #b8b8b8;
+}
+
+:root[data-theme='whitey'] #write blockquote {
+  border-left: 0;
+  padding-left: 2em;
+  font-style: italic;
+}
