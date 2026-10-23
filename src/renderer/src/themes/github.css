@@ -47,6 +47,7 @@
   --task-box-border: #b7b7b7;
   --task-box-bg: #ffffff;
   --task-box-checked: #007aff;
+  --highlight-bg: #ffff00;
 
   /* Classic CodeMirror palette */
   --cm-keyword: #770088;

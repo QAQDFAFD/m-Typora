@@ -57,7 +57,8 @@ export class App {
       onCursorMove: (view) => this.keepCursorCentered(view),
       resolveImage: (src) => this.resolveImage(src),
       uploadImage: (file) => this.storeImage(file),
-      autoPair: () => this.prefs.autoPair
+      autoPair: () => this.prefs.autoPair,
+      isDark: () => this.prefs.theme === 'night'
     })
     this.source = new SourceEditor(this.sourceRoot, () => this.onContentChange())
     this.frontMatter = new FrontMatterBlock(
@@ -229,6 +230,15 @@ export class App {
       default:
         // Paragraph and Format commands go to whichever editor is visible.
         this.activeEditor().exec(command)
+    }
+  }
+
+  /** Load / save hooks for the dev-only round-trip check (see roundtrip.ts). */
+  testHarness() {
+    return {
+      load: (markdown: string) => this.load(null, markdown),
+      save: () => this.currentMarkdown(),
+      html: () => this.writeEl.querySelector('.ProseMirror')?.innerHTML ?? ''
     }
   }
 
@@ -667,6 +677,7 @@ export class App {
       '=': 'heading-up',
       '-': 'heading-down',
       k: 'link',
+      u: 'underline',
       l: 'select-line',
       e: 'select-styled',
       d: 'select-word',

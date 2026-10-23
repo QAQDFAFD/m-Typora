@@ -23,6 +23,7 @@ export interface SearchHit {
 
 export const THEMES = [
   { id: 'github', label: 'Github' },
+  { id: 'gothic', label: 'Gothic' },
   { id: 'newsprint', label: 'Newsprint' },
   { id: 'night', label: 'Night' },
   { id: 'pixyll', label: 'Pixyll' },
@@ -87,6 +88,7 @@ export type MenuCommand =
   | 'emphasis'
   | 'inline-code'
   | 'strike'
+  | 'underline'
   | 'link'
   | 'image'
   | 'clear-format'

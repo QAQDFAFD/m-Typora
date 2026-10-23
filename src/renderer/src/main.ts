@@ -10,12 +10,12 @@ import '@milkdown/crepe/theme/common/prosemirror.css'
 import '@milkdown/crepe/theme/common/cursor.css'
 import '@milkdown/crepe/theme/common/code-mirror.css'
 import '@milkdown/crepe/theme/common/list-item.css'
-import '@milkdown/crepe/theme/common/image-block.css'
 import '@milkdown/crepe/theme/common/link-tooltip.css'
 import '@milkdown/crepe/theme/common/table.css'
 import '@milkdown/crepe/theme/common/latex.css'
 import 'katex/dist/katex.min.css'
 import './themes/github.css'
+import './themes/gothic.css'
 import './themes/newsprint.css'
 import './themes/night.css'
 import './themes/pixyll.css'
@@ -26,7 +26,12 @@ import { App } from './app'
 
 const app = new App()
 // Handy for poking at the editor from devtools during development.
-if (import.meta.env.DEV) Object.assign(window, { mtyporaApp: app })
+if (import.meta.env.DEV) {
+  Object.assign(window, {
+    mtyporaApp: app,
+    mtyporaRoundTrip: async () => (await import('./roundtrip')).runRoundTrip(app.testHarness())
+  })
+}
 app.start().catch((error) => {
   console.error('[m-typora] failed to start', error)
 })

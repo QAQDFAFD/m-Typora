@@ -1,8 +1,8 @@
 import { Crepe } from '@milkdown/crepe'
-import { editorViewCtx, remarkStringifyOptionsCtx, schemaCtx, serializerCtx, type CmdKey } from '@milkdown/kit/core'
+import { editorViewCtx, schemaCtx, serializerCtx, type CmdKey } from '@milkdown/kit/core'
 import { redo, undo } from '@milkdown/kit/prose/history'
 import { DOMSerializer, type Node as ProseNode } from '@milkdown/kit/prose/model'
-import { Selection, TextSelection } from '@milkdown/kit/prose/state'
+import { NodeSelection, Selection, TextSelection } from '@milkdown/kit/prose/state'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import {
   createCodeBlockCommand,
@@ -19,11 +19,16 @@ import {
   wrapInOrderedListCommand
 } from '@milkdown/kit/preset/commonmark'
 import { insertTableCommand, toggleStrikethroughCommand } from '@milkdown/kit/preset/gfm'
+import { upload, uploadConfig } from '@milkdown/kit/plugin/upload'
 import { callCommand, replaceAll } from '@milkdown/kit/utils'
 import type { MenuCommand } from '../../shared/api'
 import { createAutoPairPlugin } from './auto-pair'
 import { codeFenceTheme } from './code-theme'
+import { renderDiagramPreview } from './diagrams'
+import { createExtendedSyntaxPlugin } from './extended-syntax'
 import { createFocusPlugin } from './focus-plugin'
+import { createImagePlugin } from './image-view'
+import { configureMarkdown } from './markdown-config'
 import { searchPlugin } from './search-plugin'
 import { syntaxRevealPlugin } from './syntax-reveal'
 
@@ -36,6 +41,8 @@ export interface WysiwygOptions {
   /** Persists a pasted/dropped image and returns the src to write into markdown. */
   uploadImage(file: File): Promise<string>
   autoPair(): boolean
+  /** Whether the active theme is dark (diagrams follow it). */
+  isDark(): boolean
 }
 
 const BULLET_ICON = '<span class="md-bullet"></span>'
@@ -57,33 +64,40 @@ export class WysiwygEditor {
         [Crepe.Feature.Toolbar]: false,
         [Crepe.Feature.Placeholder]: false,
         [Crepe.Feature.TopBar]: false,
-        [Crepe.Feature.AI]: false
+        [Crepe.Feature.AI]: false,
+        // Crepe's image block stores its resize ratio in the alt text, which destroys
+        // the user's alt text on save; plain Markdown images are used instead.
+        [Crepe.Feature.ImageBlock]: false
       },
       featureConfigs: {
         // Native caret like Typora; keep only the drop / gap cursors.
         [Crepe.Feature.Cursor]: { virtual: false, color: '#9fb8e8', width: 2 },
-        [Crepe.Feature.CodeMirror]: { theme: codeFenceTheme, searchPlaceholder: '搜索语言', noResultText: '无匹配', copyText: '复制', previewLabel: '预览' },
-        [Crepe.Feature.ListItem]: { bulletIcon: BULLET_ICON, checkBoxCheckedIcon: CHECKED_ICON, checkBoxUncheckedIcon: UNCHECKED_ICON },
-        [Crepe.Feature.ImageBlock]: {
-          onUpload: options.uploadImage,
-          blockOnUpload: options.uploadImage,
-          inlineOnUpload: options.uploadImage,
-          proxyDomURL: options.resolveImage,
-          blockUploadPlaceholderText: '粘贴图片链接，或',
-          blockUploadButton: '选择文件',
-          blockConfirmButton: '确定',
-          blockCaptionPlaceholderText: '图片描述',
-          inlineUploadPlaceholderText: '粘贴图片链接，或',
-          inlineUploadButton: '选择文件',
-          inlineConfirmButton: '确定'
-        }
+        [Crepe.Feature.CodeMirror]: {
+          theme: codeFenceTheme,
+          searchPlaceholder: '搜索语言',
+          noResultText: '无匹配',
+          copyText: '复制',
+          previewLabel: '预览',
+          renderPreview: (language, content, apply) => renderDiagramPreview(language, content, apply, options.isDark)
+        },
+        [Crepe.Feature.ListItem]: { bulletIcon: BULLET_ICON, checkBoxCheckedIcon: CHECKED_ICON, checkBoxUncheckedIcon: UNCHECKED_ICON }
       }
     })
-    // Write Markdown the way Typora does: "-" bullets, "---" rules, "*" emphasis.
+    configureMarkdown(this.crepe.editor)
     this.crepe.editor.config((ctx) => {
-      ctx.update(remarkStringifyOptionsCtx, (prev) => ({ ...prev, bullet: '-' as const, rule: '-' as const, emphasis: '*' as const, strong: '*' as const }))
+      ctx.update(uploadConfig.key, (prev) => ({
+        ...prev,
+        uploader: async (files, schema) => {
+          const images = Array.from(files).filter((file) => file.type.startsWith('image/'))
+          const sources = await Promise.all(images.map((file) => options.uploadImage(file)))
+          return sources.map((src, i) => schema.nodes.image.createAndFill({ src, alt: images[i].name.replace(/\.[^.]+$/, '') })!)
+        }
+      }))
     })
     this.crepe.editor
+      .use(upload)
+      .use(createImagePlugin(options.resolveImage))
+      .use(createExtendedSyntaxPlugin(options.resolveImage))
       .use(syntaxRevealPlugin)
       .use(searchPlugin)
       .use(createAutoPairPlugin(options.autoPair))
@@ -211,10 +225,25 @@ export class WysiwygEditor {
         return call(toggleInlineCodeCommand.key)
       case 'strike':
         return call(toggleStrikethroughCommand.key)
+      case 'underline': {
+        // Markdown has no underline; Typora writes <u>…</u> around the selection.
+        const { from, to } = view.state.selection
+        const html = view.state.schema.nodes.html
+        if (!html || from === to) return false
+        view.dispatch(view.state.tr.insert(to, html.create({ value: '</u>' })).insert(from, html.create({ value: '<u>' })))
+        return true
+      }
       case 'link':
         return call(toggleLinkCommand.key, { href: '' })
-      case 'image':
-        return call(insertImageCommand.key, { src: '', alt: '' })
+      case 'image': {
+        // Like Typora: insert `![]()` and open its source for typing the path.
+        if (!call(insertImageCommand.key, { src: '', alt: '' })) return false
+        const pos = view.state.selection.from - 1
+        if (view.state.doc.nodeAt(pos)?.type.name === 'image') {
+          view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, pos)))
+        }
+        return true
+      }
       case 'clear-format': {
         const { from, to } = view.state.selection
         view.dispatch(view.state.tr.removeMark(from, to))

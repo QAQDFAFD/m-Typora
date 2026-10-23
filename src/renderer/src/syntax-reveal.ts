@@ -2,6 +2,7 @@ import type { Mark, Node as ProseNode } from '@milkdown/kit/prose/model'
 import { Plugin, PluginKey, type EditorState } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import { $prose } from '@milkdown/kit/utils'
+import { editorHasFocus } from './extended-syntax'
 
 /** Markdown delimiters per mark, shown around the styled run that holds the caret. */
 const DELIMITERS: Record<string, (mark: Mark) => [string, string]> = {
@@ -78,7 +79,8 @@ export const syntaxRevealPlugin = $prose(
     new Plugin<boolean>({
       key: revealKey,
       state: {
-        init: () => false,
+        // Opening a file rebuilds the state while the editor keeps DOM focus.
+        init: () => editorHasFocus(),
         apply: (tr, focused) => tr.getMeta(revealKey) ?? focused
       },
       props: {
