@@ -46,7 +46,7 @@ export async function launch({ port = 9240, size = '1180x800', scale } = {}) {
   await send('Runtime.enable')
 
   async function main(body) {
-    const expression = `(async () => { const electron = process.mainModule.require('electron'); const win = electron.BrowserWindow.getAllWindows()[0]; ${body} })()`
+    const expression = `(async () => { const electron = process.mainModule.require('electron'); const all = electron.BrowserWindow.getAllWindows(); const win = all.find((w) => w.webContents.getURL().includes('renderer/index.html')) ?? all[0]; ${body} })()`
     const res = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true })
     if (res.result?.exceptionDetails) throw new Error(res.result.exceptionDetails.exception?.description?.slice(0, 500) ?? 'main eval failed')
     return res.result?.result?.value
@@ -165,7 +165,8 @@ export async function launch({ port = 9240, size = '1180x800', scale } = {}) {
       await input({ type: 'mouseMove', x: from.x, y: from.y })
       await input({ type: 'mouseDown', x: from.x, y: from.y, button: 'left', clickCount: 1 })
       for (let i = 1; i <= 5; i++) {
-        await input({ type: 'mouseMove', x: from.x + ((to.x - from.x) * i) / 5, y: from.y + ((to.y - from.y) * i) / 5, button: 'left' })
+        // The held button must be in the modifiers, or Chromium treats it as a hover (no text selection).
+        await input({ type: 'mouseMove', x: from.x + ((to.x - from.x) * i) / 5, y: from.y + ((to.y - from.y) * i) / 5, button: 'left', modifiers: ['leftButtonDown'] })
         await sleep(20)
       }
       await input({ type: 'mouseUp', x: to.x, y: to.y, button: 'left', clickCount: 1 })

@@ -107,6 +107,11 @@
   outline: 2px solid var(--select-text-bg-color);
 }
 
+/* While its source is shown, the image takes the whole line so a long URL can wrap. */
+#write .md-image.selected {
+  width: 100%;
+}
+
 #write .md-image-placeholder {
   display: inline-block;
   padding: 2px 10px;
@@ -116,18 +121,26 @@
   font-size: 0.85em;
 }
 
+#write .md-image-placeholder.broken::before {
+  content: '⚠︎ ';
+}
+
 /* Typora shows the image's Markdown source above it while it is selected. */
 #write .md-image-source {
   display: block;
-  min-width: 8ch;
-  max-width: 100%;
+  width: 100%;
+  field-sizing: content;
   margin-bottom: 4px;
   padding: 1px 4px;
+  overflow: hidden;
+  resize: none;
+  white-space: pre-wrap;
+  word-break: break-all;
   border: 1px solid var(--code-border-color);
   border-radius: 3px;
   background: var(--code-bg-color);
   color: var(--text-color);
-  font: 0.9em var(--monospace);
+  font: 0.9em/1.5 var(--monospace);
   outline: none;
 }
 

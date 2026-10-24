@@ -30,7 +30,54 @@ export const THEMES = [
   { id: 'whitey', label: 'Whitey' }
 ] as const
 
-export type ThemeId = (typeof THEMES)[number]['id']
+export type BuiltinThemeId = (typeof THEMES)[number]['id']
+/** A built-in theme, or `custom:<file name>` for a CSS file in the user's theme folder. */
+export type ThemeId = BuiltinThemeId | `custom:${string}`
+
+export interface CustomTheme {
+  id: `custom:${string}`
+  label: string
+  /** The stylesheet, with relative url(...) references made absolute. */
+  css: string
+}
+
+export type UploadService = 'picgo-app' | 'picgo-core' | 'custom'
+
+export interface UploadConfig {
+  service: UploadService
+  /** PicGo-Core executable; empty means `picgo` from the user's PATH. */
+  picgoPath: string
+  /** Custom command; the image paths are appended and the last lines of its output are the URLs. */
+  command: string
+}
+
+/** An image to upload: a file on disk, or bytes (pasted screenshots) with a file name. */
+export interface UploadFile {
+  path?: string
+  name: string
+  data?: ArrayBuffer
+}
+
+export type AfterExport = 'none' | 'open' | 'reveal'
+
+export interface ExportOptions {
+  /** The document being exported; the save dialog starts in its folder. */
+  docPath: string | null
+  after: AfterExport
+}
+
+export interface HtmlExportOptions extends ExportOptions {
+  /** Inline local images as data: URLs instead of linking them relative to the HTML file. */
+  embedImages: boolean
+}
+
+export type PdfPageSize = 'A4' | 'A3' | 'A5' | 'Letter' | 'Legal'
+export type PdfMargin = 'default' | 'none' | 'narrow' | 'wide'
+
+export interface PdfExportOptions extends ExportOptions {
+  pageSize: PdfPageSize
+  margin: PdfMargin
+}
 
 export type SidebarView = 'articles' | 'tree' | 'outline' | 'search'
 
@@ -106,6 +153,7 @@ export type MenuCommand =
   | 'underline'
   | 'link'
   | 'image'
+  | 'upload-images'
   | 'clear-format'
   // View
   | 'toggle-source'
@@ -122,6 +170,7 @@ export type MenuCommand =
   | 'zoom-reset'
   // Themes
   | `theme-${ThemeId}`
+  | 'open-theme-folder'
   // Help
   | 'quick-start'
 
@@ -135,6 +184,8 @@ export interface MenuState {
   statusBar: boolean
   theme: ThemeId
   hasFile: boolean
+  /** The theme's page color, so the native window never flashes another color. */
+  background: string
 }
 
 export interface MTyporaApi {
@@ -148,8 +199,15 @@ export interface MTyporaApi {
   renameFile(path: string, newName: string): Promise<string>
   /** Copies a pasted/dropped image next to the document and returns its relative path. */
   saveAsset(docPath: string, fileName: string, data: ArrayBuffer): Promise<string>
-  exportHtml(suggestedName: string, html: string): Promise<string | null>
-  exportPdf(suggestedName: string): Promise<string | null>
+  /** Uploads images with PicGo or a custom command; resolves to one URL per image. */
+  uploadImages(files: UploadFile[], config: UploadConfig): Promise<string[]>
+  /** The path of a file dropped or pasted from the file manager ('' for in-memory data). */
+  pathForFile(file: File): string
+  exportHtml(suggestedName: string, html: string, options: HtmlExportOptions): Promise<string | null>
+  /** Prints the standalone `html` page (see export.ts) to a PDF file. */
+  exportPdf(suggestedName: string, html: string, options: PdfExportOptions): Promise<string | null>
+  listThemes(): Promise<CustomTheme[]>
+  openThemeFolder(): void
   print(): void
   revealInFinder(path: string): void
   openExternal(url: string): void

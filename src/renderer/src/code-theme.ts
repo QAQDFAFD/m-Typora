@@ -6,7 +6,7 @@ import { tags as t } from '@lezer/highlight'
  * Code-fence highlighting in the classic CodeMirror palette Typora's default theme uses.
  * Colors come from CSS variables so every theme (including Night) can restyle them.
  */
-const highlight = HighlightStyle.define([
+export const codeHighlightStyle = HighlightStyle.define([
   { tag: [t.keyword, t.controlKeyword, t.moduleKeyword, t.operatorKeyword], color: 'var(--cm-keyword)' },
   { tag: [t.atom, t.bool, t.null], color: 'var(--cm-atom)' },
   { tag: [t.number], color: 'var(--cm-number)' },
@@ -40,5 +40,5 @@ const chrome = EditorView.theme({
   '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': { backgroundColor: 'var(--select-text-bg-color)' }
 })
 
-export const codeFenceTheme = [chrome, syntaxHighlighting(highlight)]
-export const sourceHighlight = syntaxHighlighting(highlight)
+export const codeFenceTheme = [chrome, syntaxHighlighting(codeHighlightStyle)]
+export const sourceHighlight = syntaxHighlighting(codeHighlightStyle)
