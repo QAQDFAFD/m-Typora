@@ -2,6 +2,10 @@
   "cases": {
     "imageTitle": "![alt text](a.png \"Title\")",
     "imageInline": "Before ![logo](img/logo.png) after.",
+    "imageWidth": "<img src=\"a.png\" alt=\"logo\" width=\"320\" />",
+    "imageWidthInline": "Before <img src=\"img/logo.png\" alt=\"logo\" width=\"48\" /> after.",
+    "imageZoom": "<img src=\"shot.png\" alt=\"shot\" style=\"zoom:50%;\" />",
+    "imageHtmlOther": "<img src=\"a.png\" height=\"20\" />",
     "subscript": "H~2~O",
     "superscript": "X^2^",
     "highlight": "A ==highlighted== word.",

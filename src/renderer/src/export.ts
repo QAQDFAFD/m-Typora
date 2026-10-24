@@ -31,6 +31,7 @@ const EDITING_ONLY = [
   '.md-meta',
   '.md-meta-inline',
   '.md-image-source',
+  '.md-image-resize',
   '.ProseMirror-gapcursor',
   '.ProseMirror-separator',
   '.column-resize-handle'
@@ -178,7 +179,8 @@ export async function buildExportPage(page: ExportPage): Promise<string> {
   clone.querySelectorAll('[draggable]').forEach((el) => el.removeAttribute('draggable'))
   for (const name of EDITING_CLASSES) clone.querySelectorAll(`.${name}`).forEach((el) => el.classList.remove(name))
   clone.querySelectorAll('.md-image').forEach((image) => {
-    if (image.querySelector('img:not([hidden])')) image.querySelector('.md-image-placeholder')?.remove()
+    if (image.querySelector('.md-image-frame:not([hidden]) img')) image.querySelector('.md-image-placeholder')?.remove()
+    else image.querySelector('.md-image-frame')?.remove()
   })
 
   const blocks = Array.from(clone.querySelectorAll<HTMLElement>('.milkdown-code-block'))
@@ -198,7 +200,7 @@ export async function buildExportPage(page: ExportPage): Promise<string> {
       ? `<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@${katex.version}/dist/katex.min.css">\n`
       : ''
   return `<!doctype html>
-<html lang="zh-CN" data-theme="${escapeHtml(root.dataset.theme ?? 'github')}" data-platform="${escapeHtml(root.dataset.platform ?? '')}" style="${escapeHtml(vars)} --zoom: 1;">
+<html lang="zh-CN" data-theme="${escapeHtml(root.dataset.theme ?? 'github')}" data-platform="${escapeHtml(root.dataset.platform ?? '')}" data-image-align="${escapeHtml(root.dataset.imageAlign ?? 'center')}" style="${escapeHtml(vars)} --zoom: 1;">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">

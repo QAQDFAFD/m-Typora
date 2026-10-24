@@ -98,13 +98,81 @@
   vertical-align: bottom;
 }
 
+#write .md-image-frame {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: bottom;
+}
+
+#write .md-image-frame[hidden] {
+  display: none;
+}
+
 #write .md-image img {
   display: block;
   max-width: 100%;
 }
 
-#write .md-image.selected img {
+#write .md-image.selected img,
+#write .md-image.resizing img {
   outline: 2px solid var(--select-text-bg-color);
+}
+
+/* Corner handle that resizes the image; on the left when images are right-aligned. */
+#write .md-image-resize {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  z-index: 2;
+  display: none;
+  width: 10px;
+  height: 10px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--accent-color);
+  border-radius: 2px;
+  background: var(--bg-color);
+  cursor: nwse-resize;
+}
+
+/* Only on a selected image: a small picture would otherwise be covered by it and unclickable. */
+#write .md-image.selected .md-image-resize,
+#write .md-image.resizing .md-image-resize {
+  display: block;
+}
+
+[data-image-align='right'] #write .md-image-paragraph .md-image-resize {
+  right: auto;
+  left: -5px;
+  cursor: nesw-resize;
+}
+
+#write .md-image-resize[data-size]::after {
+  content: attr(data-size);
+  position: absolute;
+  right: 0;
+  bottom: 14px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgb(0 0 0 / 70%);
+  color: #fff;
+  font: 11px/1.6 var(--ui-font);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+[data-image-align='right'] #write .md-image-paragraph .md-image-resize[data-size]::after {
+  right: auto;
+  left: 0;
+}
+
+/* Paragraphs holding only images follow Preferences › 图像 › 图片对齐. */
+[data-image-align='center'] #write .md-image-paragraph {
+  text-align: center;
+}
+
+[data-image-align='right'] #write .md-image-paragraph {
+  text-align: right;
 }
 
 /* While its source is shown, the image takes the whole line so a long URL can wrap. */
@@ -129,6 +197,7 @@
 #write .md-image-source {
   display: block;
   width: 100%;
+  text-align: left;
   field-sizing: content;
   margin-bottom: 4px;
   padding: 1px 4px;

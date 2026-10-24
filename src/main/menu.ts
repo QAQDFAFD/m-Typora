@@ -96,8 +96,10 @@ export function buildMenu(menuActions: MenuActions, themes: Array<Pick<CustomThe
   customThemes = themes.map(({ id, label }) => ({ id, label }))
   const { newWindow, send } = menuActions
   const c = (label: string, command: MenuCommand, accelerator?: string) => commandItem(send, label, command, accelerator)
+  // Checkboxes, not radio items: a separator splits radio items into groups that each keep
+  // a selection, so a built-in theme stayed checked next to the chosen custom theme.
   const themeItem = (id: CustomTheme['id'] | (typeof THEMES)[number]['id'], label: string) =>
-    commandItem(send, label, `theme-${id}`, undefined, { type: 'radio' })
+    commandItem(send, label, `theme-${id}`, undefined, { type: 'checkbox' })
 
   const template: MenuItemConstructorOptions[] = [
     ...(isMac
@@ -266,10 +268,7 @@ export function syncMenu(state: MenuState): void {
   check('toggle-focus', state.focus)
   check('toggle-typewriter', state.typewriter)
   check('toggle-statusbar', state.statusBar)
-  // Assigning `checked` on a radio item always selects it (Electron ignores the value),
-  // so only the active theme may be assigned.
-  const themeItem = menu.getMenuItemById(`theme-${state.theme}`)
-  if (themeItem && !themeItem.checked) themeItem.checked = true
+  for (const { id } of [...THEMES, ...customThemes]) check(`theme-${id}`, id === state.theme)
   for (const id of ['rename', 'reveal-in-finder', 'copy-path']) enable(id, state.hasFile)
 }
 
