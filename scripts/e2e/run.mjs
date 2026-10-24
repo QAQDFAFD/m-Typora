@@ -1370,6 +1370,149 @@ try {
     await app.clickMenuItem('theme-github')
     expect((await q(`getComputedStyle(document.body).backgroundColor`)) === 'rgb(255, 255, 255)', 'did not switch back')
   })
+  console.log('Q. 问题清单第二轮 (docs/problems.md)')
+  await test('Q1', '窗口原生外观跟随主题（红绿灯不再被压扁）', async () => {
+    if ((await app.main(`return process.platform`)) !== 'darwin') return
+    await app.clickMenuItem('theme-night')
+    expect((await app.main(`return [electron.nativeTheme.themeSource, electron.nativeTheme.shouldUseDarkColors]`)).join() === 'dark,true', 'night is not dark')
+    await app.clickMenuItem('theme-github')
+    expect((await app.main(`return [electron.nativeTheme.themeSource, electron.nativeTheme.shouldUseDarkColors]`)).join() === 'light,false', 'github is not light')
+  })
+  await test('Q2', '偏好设置分组前有单色图标', async () => {
+    await app.menu('preferences')
+    const icons = await q(`[...document.querySelectorAll('.prefs-nav-item')].map((b) => { const svg = b.querySelector('svg'); return svg ? [svg.getAttribute('stroke'), Math.round(svg.getBoundingClientRect().width)].join() : null })`)
+    expect(icons.length === 5 && icons.every((icon) => icon === 'currentColor,16'), `icons ${JSON.stringify(icons)}`)
+    expect(JSON.stringify(await q(`[...document.querySelectorAll('.prefs-nav-item')].map((b) => b.textContent)`)) === JSON.stringify(['通用', '编辑器', '图像', '导出', '外观']), 'labels changed')
+    await app.key('Escape')
+  })
+  await writeFile(join(docs, 'pic.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><rect width="200" height="100" fill="#4a90d9"/></svg>')
+  const imageBox = () => q(`(() => { const i = document.querySelector('#write .md-image img'), p = i.closest('p').getBoundingClientRect(), r = i.getBoundingClientRect(); return { width: Math.round(r.width), left: Math.round(r.left - p.left), right: Math.round(p.right - r.right) } })()`)
+  await test('Q3', '拖动手柄调整图片大小，双击恢复', async () => {
+    const path = await openFresh('Intro\n\n![pic](pic.svg)\n\nAfter.\n')
+    for (let i = 0; i < 20 && (await imageBox()).width !== 200; i++) await sleep(100)
+    expect(!(await visible('#write .md-image-resize')), 'handle shown before the image is selected')
+    await app.click('#write .md-image img')
+    // Selecting shows the source box above the picture, so measure afterwards.
+    const img = await app.rect('#write .md-image img')
+    const handle = await app.rect('#write .md-image-resize')
+    expect(handle && handle.width > 0 && Math.abs(handle.x - img.right) < 8 && Math.abs(handle.y - img.bottom) < 8, `handle ${JSON.stringify(handle)}`)
+    // Centered: the image shrinks on both sides, twice the pointer's distance.
+    await app.drag({ x: handle.x, y: handle.y }, { x: handle.x - 40, y: handle.y })
+    expect((await imageBox()).width === 120, `width ${JSON.stringify(await imageBox())}`)
+    let text = await save(path)
+    expect(text.includes('<img src="pic.svg" alt="pic" width="120" />'), `saved ${JSON.stringify(text)}`)
+    await app.key('Z', ['meta'])
+    expect((await imageBox()).width === 200, 'undo did not restore the size')
+    await app.key('Z', ['meta', 'shift'])
+    // Reopened, it is still an image (selectable, resizable), not raw HTML.
+    await app.answer('message', 1)
+    await app.open(path)
+    await sleep(300)
+    expect((await count('#write .md-image')) === 1 && (await imageBox()).width === 120, `reopened ${JSON.stringify(await imageBox())}`)
+    await app.click('#write .md-image img')
+    const handle2 = await app.rect('#write .md-image-resize')
+    await app.clickAt(handle2.x, handle2.y, { clickCount: 1 })
+    await app.clickAt(handle2.x, handle2.y, { clickCount: 2 })
+    await sleep(150)
+    text = await save(path)
+    expect(text.includes('![pic](pic.svg)') && (await imageBox()).width === 200, `not reset: ${JSON.stringify(text)}`)
+  })
+  await test('Q4', '图片对齐：默认居中，可改为居左 / 居右', async () => {
+    await openFresh('![pic](pic.svg)\n\nText ![inline](pic.svg) here.\n')
+    for (let i = 0; i < 20 && (await imageBox()).width !== 200; i++) await sleep(100)
+    let box = await imageBox()
+    expect(Math.abs(box.left - box.right) <= 2, `not centered ${JSON.stringify(box)}`)
+    expect((await q(`getComputedStyle(document.querySelectorAll('#write p')[1]).textAlign`)) === 'start', 'image in text was aligned')
+    await app.menu('preferences')
+    await app.click('.prefs-nav-item[data-section="image"]')
+    expect((await q(`document.querySelector('[data-pref="imageAlign"]').value`)) === 'center', 'default is not center')
+    await setPref('imageAlign', 'right')
+    box = await imageBox()
+    expect(box.right <= 1 && box.left > 100, `not right ${JSON.stringify(box)}`)
+    await setPref('imageAlign', 'left')
+    box = await imageBox()
+    expect(box.left <= 1, `not left ${JSON.stringify(box)}`)
+    await setPref('imageAlign', 'center')
+    await app.key('Escape')
+  })
+  await test('Q5', '选择自定义主题时内置主题不再同时打勾', async () => {
+    const themes = join(await app.main(`return electron.app.getPath('userData')`), 'themes')
+    // P11 adds the theme; create it here when running Q on its own.
+    if ((await app.menuChecked('theme-custom:ocean-breeze')) === null) {
+      await mkdir(themes, { recursive: true })
+      await writeFile(join(themes, 'ocean-breeze.css'), ':root { --bg-color: rgb(1, 2, 3); color-scheme: dark; }\n')
+      await app.main(`win.webContents.reload(); return true`)
+      for (let i = 0; i < 40 && !(await app.page(`return !!document.querySelector('#write .ProseMirror')`).catch(() => false)); i++) await sleep(250)
+      await sleep(500)
+    }
+    await app.clickMenuItem('theme-night')
+    await app.clickMenuItem('theme-custom:ocean-breeze')
+    const checked = async () => {
+      const ids = ['theme-github', 'theme-night', 'theme-custom:ocean-breeze']
+      return Object.fromEntries(await Promise.all(ids.map(async (id) => [id.replace('theme-', ''), await app.menuChecked(id)])))
+    }
+    let state = await checked()
+    expect(!state.night && !state.github && state['custom:ocean-breeze'], `checked ${JSON.stringify(state)}`)
+    await app.clickMenuItem('theme-github')
+    state = await checked()
+    expect(state.github && !state['custom:ocean-breeze'] && !state.night, `checked ${JSON.stringify(state)}`)
+    // Choosing the current theme again keeps it checked.
+    await app.clickMenuItem('theme-github')
+    expect(await app.menuChecked('theme-github'), 'unchecked by a second click')
+  })
+  await test('Q6', 'PicGo 端口可以配置，默认 36677', async () => {
+    const server = http.createServer((req, res) => {
+      let body = ''
+      req.on('data', (chunk) => (body += chunk))
+      req.on('end', () => {
+        res.setHeader('Content-Type', 'application/json')
+        res.end(JSON.stringify({ success: true, result: (JSON.parse(body || '{}').list ?? []).map((path) => `https://port.example/${basename(path)}`) }))
+      })
+    })
+    const port = await new Promise((done) => server.listen(0, '127.0.0.1', () => done(server.address().port)))
+    try {
+      await app.menu('preferences')
+      await app.click('.prefs-nav-item[data-section="image"]')
+      await setPref('uploadService', 'picgo-app')
+      expect((await q(`document.querySelector('[data-pref="picgoPort"]').value`)) === '36677', 'default port is not 36677')
+      await setPref('picgoPort', String(port))
+      await app.click('[data-action="test-upload"]')
+      for (let i = 0; i < 20 && (await q(`document.querySelector('[data-status="upload"]').textContent`)).startsWith('正在'); i++) await sleep(150)
+      expect((await q(`document.querySelector('[data-status="upload"]').textContent`)).includes('https://port.example/'), await q(`document.querySelector('[data-status="upload"]').textContent`))
+      await setPref('picgoPort', '70000')
+      expect((await q(`document.querySelector('[data-pref="picgoPort"]').value`)) === String(port), 'invalid port accepted')
+      await setPref('picgoPort', '')
+      expect((await q(`document.querySelector('[data-pref="picgoPort"]').value`)) === '36677', 'empty port did not go back to the default')
+      await app.key('Escape')
+    } finally {
+      server.close()
+    }
+  })
+  const caretAfter = () => q(`(() => { const s = getSelection(), n = s.anchorNode; const before = n.nodeType === 1 ? n.childNodes[s.anchorOffset - 1] : null; return before?.className ?? (n.nodeType === 3 ? 'text:' + n.textContent.slice(0, s.anchorOffset) : n.nodeName) })()`)
+  await test('Q7', '光标可以移到 ** 外侧，退格删除 * 取消加粗', async () => {
+    const path = await openFresh('Make **1** bold here\n\nEnd **bold**\n\nKeep **this** word\n')
+    await app.clickText('1', 1)
+    expect((await count('#write p:first-child .md-meta')) === 2, 'syntax not revealed')
+    await app.key('Right')
+    expect((await caretAfter()).includes('md-meta-close'), `caret not after **: ${await caretAfter()}`)
+    await app.key('Backspace')
+    let text = await save(path)
+    expect(text.startsWith('Make \\*\\*1\\* bold here\n'), `after backspace ${JSON.stringify(text)}`)
+    // Typing the * back makes it bold again.
+    await app.type('*')
+    text = await save(path)
+    expect(text.startsWith('Make **1** bold here\n'), `after retyping ${JSON.stringify(text)}`)
+    // A click past the closing ** puts the caret outside: typed text is not bold.
+    await app.clickText('bold', 1, '#write p:nth-child(2)')
+    const close = await app.rect('#write p:nth-child(2) .md-meta-close')
+    await app.clickAt(close.right + 20, close.y)
+    await app.type('X')
+    // Left from inside the text steps over nothing; Delete before the closing ** removes a *.
+    await app.clickText('this', 4, '#write p:nth-child(3)')
+    await app.key('Delete')
+    text = await save(path)
+    expect(text.includes('End **bold**X\n') && text.includes('Keep \\*\\*this\\* word'), `saved ${JSON.stringify(text)}`)
+  })
 } finally {
   const errors = app.logs
     .join('')

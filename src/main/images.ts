@@ -4,8 +4,6 @@ import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import type { UploadConfig, UploadFile } from '../shared/api'
 
-/** PicGo.app's built-in server (PicGo › 设置 › 设置 Server, port 36677 by default). */
-const PICGO_SERVER = 'http://127.0.0.1:36677/upload'
 const COMMAND_TIMEOUT = 120_000
 
 /** Pasted screenshots only exist in memory; uploaders need a file. */
@@ -22,16 +20,17 @@ async function toPaths(files: UploadFile[]): Promise<string[]> {
   )
 }
 
-async function uploadWithPicgoApp(paths: string[]): Promise<string[]> {
+/** PicGo.app's built-in server (PicGo › 设置 › 设置 Server, port 36677 by default). */
+async function uploadWithPicgoApp(paths: string[], port: number): Promise<string[]> {
   let response: Response
   try {
-    response = await fetch(PICGO_SERVER, {
+    response = await fetch(`http://127.0.0.1:${port}/upload`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ list: paths })
     })
   } catch {
-    throw new Error('无法连接 PicGo。请确认 PicGo 正在运行，并在 PicGo 的「设置 › 设置 Server」中打开了 Server（端口 36677）。')
+    throw new Error(`无法连接 PicGo（端口 ${port}）。请确认 PicGo 正在运行，并在 PicGo 的「设置 › 设置 Server」中打开了 Server，端口与偏好设置中的一致。`)
   }
   const result = (await response.json().catch(() => ({}))) as { success?: boolean; result?: string[]; message?: string; msg?: string }
   if (!result.success || !Array.isArray(result.result) || result.result.length < paths.length) {
@@ -72,7 +71,7 @@ export async function uploadImages(files: UploadFile[], config: UploadConfig): P
   const paths = await toPaths(files)
   switch (config.service) {
     case 'picgo-app':
-      return uploadWithPicgoApp(paths)
+      return uploadWithPicgoApp(paths, config.picgoPort)
     case 'picgo-core':
       return uploadWithCommand(`${quote(config.picgoPath.trim() || 'picgo')} upload`, paths)
     case 'custom':

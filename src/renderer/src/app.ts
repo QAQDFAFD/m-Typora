@@ -560,6 +560,7 @@ export class App {
   private applyPrefs(): void {
     const { root, prefs } = this
     root.dataset.theme = prefs.theme
+    root.dataset.imageAlign = prefs.imageAlign
     this.applyCustomTheme(prefs.theme.startsWith('custom:') ? (this.customThemes.find((theme) => theme.id === prefs.theme)?.css ?? '') : null)
     root.style.setProperty('--zoom', String(prefs.zoom))
     root.style.setProperty('--base-font-size', `${prefs.fontSize}px`)
@@ -604,7 +605,8 @@ export class App {
       statusBar: this.prefs.statusBar,
       theme: this.prefs.theme,
       hasFile: this.path !== null,
-      background: getComputedStyle(document.body).backgroundColor
+      background: getComputedStyle(document.body).backgroundColor,
+      dark: this.isDarkTheme()
     })
   }
 
@@ -663,7 +665,7 @@ export class App {
   }
 
   private uploadConfig(): UploadConfig {
-    return { service: this.prefs.uploadService, picgoPath: this.prefs.picgoPath, command: this.prefs.uploadCommand }
+    return { service: this.prefs.uploadService, picgoPort: this.prefs.picgoPort, picgoPath: this.prefs.picgoPath, command: this.prefs.uploadCommand }
   }
 
   /** Format › 上传全部本地图片: uploads every local image and points it at its new URL. */

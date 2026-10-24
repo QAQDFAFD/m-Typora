@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } from 'electron'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { basename, dirname, extname, join } from 'node:path'
@@ -32,6 +32,17 @@ const dirtyWindows = new WeakSet<BrowserWindow>()
 const menuStates = new WeakMap<BrowserWindow, MenuState>()
 const pendingOpenPaths: string[] = []
 
+/**
+ * The window's native parts follow the theme rather than the system appearance. With the
+ * system in dark mode, macOS draws the traffic lights for a dark title bar (no outline, a
+ * bright rim) and on a light theme they look squashed; menus and dialogs would not match either.
+ */
+function applyAppState(state: MenuState): void {
+  syncMenu(state)
+  const appearance = state.dark ? 'dark' : 'light'
+  if (nativeTheme.themeSource !== appearance) nativeTheme.themeSource = appearance
+}
+
 function createWindow(initialPath?: string): BrowserWindow {
   const win = new BrowserWindow({
     width: SMOKE_SIZE ? Number(SMOKE_SIZE[1]) : 1180,
@@ -59,7 +70,7 @@ function createWindow(initialPath?: string): BrowserWindow {
 
   win.on('focus', () => {
     const state = menuStates.get(win)
-    if (state) syncMenu(state)
+    if (state) applyAppState(state)
   })
 
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -244,7 +255,7 @@ function registerIpc(): void {
     menuStates.set(win, state)
     // Match the window background to the theme so resizing never flashes white.
     if (state.background) win.setBackgroundColor(state.background)
-    if (BrowserWindow.getFocusedWindow() === win || BrowserWindow.getAllWindows().length === 1) syncMenu(state)
+    if (BrowserWindow.getFocusedWindow() === win || BrowserWindow.getAllWindows().length === 1) applyAppState(state)
   })
 
   ipcMain.on('window:set-title', (event, title: string, edited: boolean, path: string | null) => {

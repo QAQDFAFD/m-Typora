@@ -45,6 +45,8 @@ export type UploadService = 'picgo-app' | 'picgo-core' | 'custom'
 
 export interface UploadConfig {
   service: UploadService
+  /** Port of PicGo.app's upload server (PicGo › 设置 › 设置 Server). */
+  picgoPort: number
   /** PicGo-Core executable; empty means `picgo` from the user's PATH. */
   picgoPath: string
   /** Custom command; the image paths are appended and the last lines of its output are the URLs. */
@@ -186,6 +188,8 @@ export interface MenuState {
   hasFile: boolean
   /** The theme's page color, so the native window never flashes another color. */
   background: string
+  /** A dark theme: native parts of the window (traffic lights, menus, dialogs) go dark too. */
+  dark: boolean
 }
 
 export interface MTyporaApi {

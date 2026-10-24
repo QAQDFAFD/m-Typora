@@ -841,13 +841,25 @@ svg {
 }
 
 .prefs-nav-item {
-  padding: 7px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
   border: 0;
   border-radius: 6px;
   background: none;
   color: var(--control-text-color);
   text-align: left;
   font-size: 13px;
+}
+
+.prefs-nav-item svg {
+  flex: none;
+  opacity: 0.75;
+}
+
+.prefs-nav-item.active svg {
+  opacity: 1;
 }
 
 .prefs-nav-item:hover {
@@ -881,14 +893,14 @@ svg {
 }
 
 .prefs-row select,
-.prefs-row input[type='text'] {
+.prefs-row input:is([type='text'], [type='number']) {
   margin-left: auto;
   width: 220px;
   flex: none;
   font: inherit;
 }
 
-.prefs-row input[type='text'] {
+.prefs-row input:is([type='text'], [type='number']) {
   padding: 3px 6px;
   border: 1px solid var(--sidebar-border-color);
   border-radius: 4px;
