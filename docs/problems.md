@@ -20,8 +20,6 @@
 
 ![image](https://ljj-image.top/2026/10/a14c89072597de8227fedc961e8d8682.png)
 
----
-
 ## 处理结果
 
 分支 `fix/problems-round-2`。每一项都有对应的端到端测试（`node scripts/e2e/run.mjs Q`，见 docs/test-plan.md 的 Q 节）。
