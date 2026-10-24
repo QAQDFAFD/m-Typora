@@ -1,7 +1,7 @@
 import type { EditorView } from '@milkdown/kit/prose/view'
-import type { MenuCommand, SearchHit, SidebarView, ThemeId } from '../../shared/api'
+import type { CustomTheme, MenuCommand, SearchHit, SidebarView, ThemeId, UploadConfig, UploadFile } from '../../shared/api'
 import { bridge, isDesktop } from './bridge'
-import { buildHtmlDocument } from './export'
+import { buildExportPage, buildPlainHtml } from './export'
 import { FindBar } from './findbar'
 import { FrontMatterBlock, joinFrontMatter, splitFrontMatter } from './front-matter'
 import { countText, dirName, extractHeadings, fileName, stripExtension, type Heading } from './markdown-utils'
@@ -28,6 +28,8 @@ export class App {
   private dirty = false
   private mode: Mode = 'wysiwyg'
   private prefs: Prefs = loadPrefs()
+  private customThemes: CustomTheme[] = []
+  private customThemeStyle: HTMLStyleElement | null = null
 
   private root = document.documentElement
   private scroller = $('#scroller')
@@ -49,6 +51,7 @@ export class App {
   private refreshTimer = 0
   private autoSaveTimer = 0
   private footerTimer = 0
+  private toastTimer = 0
   private pinnedHeading: { index: number; until: number } | null = null
 
   constructor() {
@@ -59,7 +62,7 @@ export class App {
       resolveImage: (src) => this.resolveImage(src),
       uploadImage: (file) => this.storeImage(file),
       autoPair: () => this.prefs.autoPair,
-      isDark: () => this.prefs.theme === 'night'
+      isDark: () => this.isDarkTheme()
     })
     this.source = new SourceEditor(this.sourceRoot, () => this.onContentChange())
     this.frontMatter = new FrontMatterBlock(
@@ -96,13 +99,24 @@ export class App {
       onClose: () => this.closeFindBar()
     })
     this.quickOpen = new QuickOpen($('#quick-open'), (path) => this.openPath(path))
-    this.preferences = new PreferencesDialog($('#preferences'), (patch) => this.updatePrefs(patch))
+    this.preferences = new PreferencesDialog($('#preferences'), {
+      onChange: (patch) => this.updatePrefs(patch),
+      onTestUpload: () => this.testUpload(),
+      onOpenThemeFolder: () => bridge.openThemeFolder(),
+      customThemes: () => this.customThemes.map(({ id, label }) => ({ id, label })),
+      fileManager: bridge.platform === 'darwin' ? '访达' : '文件夹'
+    })
   }
 
   async start(): Promise<void> {
     this.root.dataset.platform = bridge.platform
     if (!isMacLike()) localizeShortcutHints(document.body)
     this.sidebar.setView(this.prefs.sidebarView)
+    // Custom themes live in a folder the main process reads; know them before the first paint.
+    this.customThemes = await bridge.listThemes().catch(() => [])
+    if (this.prefs.theme.startsWith('custom:') && !this.customThemes.some((theme) => theme.id === this.prefs.theme)) {
+      this.prefs = { ...this.prefs, theme: 'github' }
+    }
     this.applyPrefs()
     await this.wysiwyg.whenReady()
     this.load(null, '')
@@ -159,18 +173,19 @@ export class App {
         if (this.path) await navigator.clipboard.writeText(this.path)
         return
       case 'export-html':
-      case 'export-html-plain': {
-        const title = stripExtension(fileName(this.path))
-        await bridge.exportHtml(title, buildHtmlDocument(title, this.renderHtml(), command === 'export-html'))
-        return
-      }
+        return this.exportDocument('html')
+      case 'export-html-plain':
+        return this.exportDocument('html-plain')
       case 'export-pdf':
-        await bridge.exportPdf(stripExtension(fileName(this.path)))
-        return
+        return this.exportDocument('pdf')
       case 'print':
         return bridge.print()
       case 'preferences':
         return this.preferences.open(this.prefs)
+      case 'open-theme-folder':
+        return bridge.openThemeFolder()
+      case 'upload-images':
+        return this.uploadAllImages()
       case 'quick-start':
         if (await this.confirmLeave()) this.load(null, WELCOME_MARKDOWN)
         return
@@ -283,8 +298,6 @@ export class App {
     try {
       const file = await bridge.readFile(path)
       this.load(file.path, file.content)
-      // In a narrow window the sidebar floats over the text; get it out of the way.
-      if (this.prefs.sidebar && window.matchMedia('(max-width: 760px)').matches) this.updatePrefs({ sidebar: false })
     } catch (error) {
       alert(`无法打开文件：${path}\n${(error as Error).message}`)
     }
@@ -292,9 +305,15 @@ export class App {
 
   private async openSearchHit(hit: SearchHit, query: string): Promise<void> {
     await this.openPath(hit.path)
-    if (this.path !== hit.path) return
+    // Line 0 is a match on the file name: opening the file is all there is to do.
+    if (this.path !== hit.path || hit.line === 0) return
     if (this.mode === 'source') return this.source.revealLine(hit.line)
-    this.findBar.open(false, query)
+    // Words searched for separately are highlighted by the longest one.
+    const phrase = query.trim()
+    const needle = hit.text.toLowerCase().includes(phrase.toLowerCase())
+      ? phrase
+      : phrase.split(/\s+/).reduce((longest, word) => (word.length > longest.length ? word : longest), '')
+    this.findBar.open(false, needle)
     stepSearch(this.wysiwyg.view(), 1)
     this.updateFindCount()
   }
@@ -541,6 +560,7 @@ export class App {
   private applyPrefs(): void {
     const { root, prefs } = this
     root.dataset.theme = prefs.theme
+    this.applyCustomTheme(prefs.theme.startsWith('custom:') ? (this.customThemes.find((theme) => theme.id === prefs.theme)?.css ?? '') : null)
     root.style.setProperty('--zoom', String(prefs.zoom))
     root.style.setProperty('--base-font-size', `${prefs.fontSize}px`)
     root.style.setProperty('--write-max-width', LINE_WIDTHS[prefs.lineWidth])
@@ -550,7 +570,28 @@ export class App {
     root.classList.toggle('typewriter-mode', prefs.typewriter)
     root.classList.toggle('statusbar-hidden', !prefs.statusBar)
     if (this.sidebar.getView() !== prefs.sidebarView) this.sidebar.setView(prefs.sidebarView)
+    this.preferences.sync(prefs)
     this.syncMenu()
+  }
+
+  /**
+   * A custom theme is the user's stylesheet layered over the default (Github) theme, so
+   * it only has to set what it changes — the way Typora themes work.
+   */
+  private applyCustomTheme(css: string | null): void {
+    if (css === null) {
+      this.customThemeStyle?.remove()
+      this.customThemeStyle = null
+      return
+    }
+    this.customThemeStyle ??= Object.assign(document.createElement('style'), { id: 'custom-theme' })
+    if (this.customThemeStyle.textContent !== css) this.customThemeStyle.textContent = css
+    if (!this.customThemeStyle.isConnected) document.head.append(this.customThemeStyle)
+  }
+
+  /** Dark themes (Night, or a custom theme declaring `color-scheme: dark`). */
+  private isDarkTheme(): boolean {
+    return getComputedStyle(this.root).colorScheme.includes('dark')
   }
 
   private syncMenu(): void {
@@ -562,7 +603,8 @@ export class App {
       typewriter: this.prefs.typewriter,
       statusBar: this.prefs.statusBar,
       theme: this.prefs.theme,
-      hasFile: this.path !== null
+      hasFile: this.path !== null,
+      background: getComputedStyle(document.body).backgroundColor
     })
   }
 
@@ -574,10 +616,25 @@ export class App {
     return `file://${encodeURI(absolute)}`
   }
 
+  /**
+   * Where a dropped or pasted image goes (Preferences › 图像 › 插入图片时): uploaded with
+   * PicGo / a command, copied into ./assets next to the document, or referenced in place.
+   */
   private async storeImage(file: File): Promise<string> {
-    if (isDesktop && this.path) {
-      return bridge.saveAsset(this.path, file.name || 'image.png', await file.arrayBuffer())
+    const path = isDesktop ? bridge.pathForFile(file) : ''
+    const name = file.name || 'image.png'
+    if (isDesktop && this.prefs.imageInsert === 'upload') {
+      this.toast('正在上传图片…', 'progress')
+      try {
+        const [url] = await bridge.uploadImages([path ? { path, name } : { name, data: await file.arrayBuffer() }], this.uploadConfig())
+        this.toast('图片已上传', 'ok')
+        return url
+      } catch (error) {
+        this.toast(`图片上传失败，已保存在本地：${errorMessage(error)}`, 'error')
+      }
     }
+    if (isDesktop && path && (this.prefs.imageInsert === 'none' || !this.path)) return this.linkToFile(path)
+    if (isDesktop && this.path) return bridge.saveAsset(this.path, name, await file.arrayBuffer())
     return new Promise((resolve, reject) => {
       const reader = new FileReader()
       reader.onload = () => resolve(String(reader.result))
@@ -586,9 +643,108 @@ export class App {
     })
   }
 
-  private renderHtml(): string {
+  /** A path to an image on disk, relative to the document when it has been saved. */
+  private linkToFile(path: string): string {
+    const target = path.replace(/\\/g, '/')
+    return this.path ? relativePath(dirName(this.path).replace(/\\/g, '/'), target) : target
+  }
+
+  /** The file an image src points at, or null when it cannot be known (unsaved document). */
+  private imageFile(src: string): string | null {
+    let path = src
+    try {
+      path = src.startsWith('file:') ? decodeURIComponent(new URL(src).pathname) : decodeURI(src)
+    } catch {
+      // Keep the src as written.
+    }
+    if (bridge.platform === 'win32' && /^\/[a-z]:/i.test(path)) path = path.slice(1)
+    if (path.startsWith('/') || /^[a-z]:[\\/]/i.test(path)) return path
+    return this.path ? `${dirName(this.path)}/${path}` : null
+  }
+
+  private uploadConfig(): UploadConfig {
+    return { service: this.prefs.uploadService, picgoPath: this.prefs.picgoPath, command: this.prefs.uploadCommand }
+  }
+
+  /** Format › 上传全部本地图片: uploads every local image and points it at its new URL. */
+  private async uploadAllImages(): Promise<void> {
+    if (!isDesktop) return
+    if (this.mode === 'source') this.setMode('wysiwyg')
+    const images = this.wysiwyg.localImages()
+    const files = images.map((image) => ({ ...image, file: this.imageFile(image.src) }))
+    const uploadable = files.filter((image): image is typeof image & { file: string } => image.file !== null)
+    if (uploadable.length === 0) {
+      this.toast(images.length === 0 ? '当前文档没有本地图片' : '请先保存文档，相对路径的图片才能找到', 'error')
+      return
+    }
+    this.toast(`正在上传 ${uploadable.length} 张图片…`, 'progress')
+    try {
+      const list: UploadFile[] = uploadable.map((image) => ({ path: image.file, name: fileName(image.file) }))
+      const urls = await bridge.uploadImages(list, this.uploadConfig())
+      this.wysiwyg.setImageSources(uploadable.map((image, i) => ({ pos: image.pos, src: urls[i] })))
+      this.toast(`已上传 ${urls.length} 张图片`, 'ok')
+    } catch (error) {
+      this.toast(`图片上传失败：${errorMessage(error)}`, 'error')
+    }
+  }
+
+  /** Preferences › 图像 › 验证: uploads a small generated picture. */
+  private async testUpload(): Promise<string> {
+    const canvas = Object.assign(document.createElement('canvas'), { width: 240, height: 80 })
+    const context = canvas.getContext('2d')!
+    context.fillStyle = '#4183c4'
+    context.fillRect(0, 0, canvas.width, canvas.height)
+    context.fillStyle = '#ffffff'
+    context.font = '600 26px sans-serif'
+    context.fillText('m-typora ✓', 32, 50)
+    const blob = await new Promise<Blob>((resolve, reject) =>
+      canvas.toBlob((result) => (result ? resolve(result) : reject(new Error('无法生成测试图片'))), 'image/png')
+    )
+    const [url] = await bridge.uploadImages([{ name: 'm-typora-upload-test.png', data: await blob.arrayBuffer() }], this.uploadConfig())
+    return url
+  }
+
+  // ----------------------------------------------------------------- export
+
+  /** File › 导出: the document as the editor shows it, with the current theme. */
+  private async exportDocument(kind: 'pdf' | 'html' | 'html-plain'): Promise<void> {
+    const title = stripExtension(fileName(this.path))
+    // Exports are built from the rendered document, so bring source edits over first.
     if (this.mode === 'source') this.wysiwyg.setMarkdown(splitFrontMatter(this.source.getMarkdown()).body, false)
-    return this.wysiwyg.toHtml()
+    const common = { docPath: this.path, after: this.prefs.afterExport }
+    try {
+      if (kind === 'html-plain') {
+        await bridge.exportHtml(title, buildPlainHtml(title, this.wysiwyg.toHtml()), { ...common, embedImages: this.prefs.htmlEmbedImages })
+        return
+      }
+      const html = await this.wysiwyg.withRenderedDocument((editor) =>
+        buildExportPage({ title, editor, codeBlocks: this.wysiwyg.codeBlocks(), dark: this.isDarkTheme(), target: kind })
+      )
+      if (kind === 'pdf') {
+        this.toast('正在导出 PDF…', 'progress')
+        const target = await bridge.exportPdf(title, html, { ...common, pageSize: this.prefs.pdfPageSize, margin: this.prefs.pdfMargin })
+        this.toast(target ? `已导出 ${fileName(target)}` : '', 'ok')
+      } else {
+        await bridge.exportHtml(title, html, { ...common, embedImages: this.prefs.htmlEmbedImages })
+      }
+    } catch (error) {
+      this.toast(`导出失败：${errorMessage(error)}`, 'error')
+    }
+  }
+
+  /** A short message at the bottom of the window (upload and export progress). */
+  private toast(text: string, kind: 'progress' | 'ok' | 'error'): void {
+    let el = document.querySelector<HTMLElement>('#toast')
+    if (!el) {
+      el = Object.assign(document.createElement('div'), { id: 'toast', className: 'toast' })
+      el.setAttribute('role', 'status')
+      document.body.append(el)
+    }
+    window.clearTimeout(this.toastTimer)
+    el.hidden = !text
+    el.textContent = text
+    el.dataset.kind = kind
+    if (kind !== 'progress') this.toastTimer = window.setTimeout(() => (el!.hidden = true), kind === 'error' ? 6000 : 2500)
   }
 
   // --------------------------------------------------------------------- UI
@@ -659,7 +815,8 @@ export class App {
       event.preventDefault()
       this.root.classList.add('resizing')
       const onMove = (move: MouseEvent) => {
-        const width = Math.min(480, Math.max(180, move.clientX))
+        // The document keeps at least 360px (see --sidebar-actual in base.css).
+        const width = Math.round(Math.max(160, Math.min(560, move.clientX, window.innerWidth - 360)))
         this.root.style.setProperty('--sidebar-width', `${width}px`)
         this.prefs.sidebarWidth = width
       }
@@ -726,6 +883,22 @@ export class App {
       true
     )
   }
+}
+
+/** The message of an error thrown in the main process, without Electron's IPC prefix. */
+function errorMessage(error: unknown): string {
+  return String((error as Error)?.message ?? error).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
+}
+
+/** `to` relative to the folder `from` (both with forward slashes). */
+function relativePath(from: string, to: string): string {
+  const a = from.split('/').filter(Boolean)
+  const b = to.split('/').filter(Boolean)
+  // Different Windows drives have no relative path.
+  if (a[0] !== b[0]) return to
+  let common = 0
+  while (common < a.length && common < b.length && a[common] === b[common]) common++
+  return [...a.slice(common).map(() => '..'), ...b.slice(common)].join('/')
 }
 
 function round(value: number): number {

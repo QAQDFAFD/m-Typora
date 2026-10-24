@@ -21,12 +21,21 @@ const VIEW_TITLES: Record<SidebarView, string> = {
 
 const ICONS = {
   plus: '<svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg>',
-  articles: '<svg viewBox="0 0 16 16"><path d="M3 4h10M3 8h10M3 12h7"/></svg>',
+  // Two stacked pages, so it no longer looks like the outline's indented lines.
+  articles: '<svg viewBox="0 0 16 16"><path d="M5.5 1.5h5l3 3v8h-8z M10.5 1.5v3h3"/><path d="M3.5 4v10.5h7"/></svg>',
   tree: '<svg viewBox="0 0 16 16"><path d="M2.5 4.5h4l1.2 1.5h5.8v6.5h-11z"/></svg>',
   outline: '<svg viewBox="0 0 16 16"><path d="M3 4h10M5 8h8M7 12h6"/></svg>',
   search: '<svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4"/><path d="M10 10l3.5 3.5"/></svg>',
   folder: '<svg viewBox="0 0 16 16" class="tree-glyph"><path d="M1.5 4h4.5l1.5 1.5h7v7.5h-13z"/></svg>',
-  file: '<svg viewBox="0 0 16 16" class="tree-glyph"><path d="M4 1.5h5.5l3 3v10h-8.5z M9.5 1.5v3h3"/></svg>'
+  file: '<svg viewBox="0 0 16 16" class="tree-glyph"><path d="M4 1.5h5.5l3 3v10h-8.5z M9.5 1.5v3h3"/></svg>',
+  chevron: '<svg viewBox="0 0 10 10" class="chevron"><path d="M3.5 1.5 7 5 3.5 8.5"/></svg>'
+}
+
+/** Expand / collapse arrow; empty for leaves so labels stay aligned. */
+function disclosure(hasChildren: boolean, collapsed: boolean, toggle?: number): string {
+  if (!hasChildren) return '<span class="disclosure"></span>'
+  const attrs = toggle === undefined ? '' : ` data-toggle="${toggle}"`
+  return `<span class="disclosure${collapsed ? '' : ' expanded'}"${attrs}>${ICONS.chevron}</span>`
 }
 
 /** Relative time in the short English form Typora's article list uses. */
@@ -46,6 +55,26 @@ function flattenFiles(nodes: TreeNode[], parent: string): Array<TreeNode & { fol
   const files = nodes.filter((n) => !n.children).map((n) => ({ ...n, folder: parent }))
   const nested = nodes.filter((n) => n.children).flatMap((n) => flattenFiles(n.children!, n.name))
   return [...files, ...nested]
+}
+
+/** Escapes `text` and marks every occurrence of each space-separated word of `query`. */
+function highlightTerms(text: string, query: string): string {
+  const terms = query.normalize('NFKC').toLowerCase().split(/\s+/).filter(Boolean)
+  const lower = text.normalize('NFKC').toLowerCase()
+  // Lengths can change under NFKC; only highlight when the folded text lines up.
+  if (lower.length !== text.length || terms.length === 0) return escapeHtml(text)
+  const marked = new Array<boolean>(text.length).fill(false)
+  for (const term of terms) {
+    for (let at = lower.indexOf(term); at >= 0; at = lower.indexOf(term, at + term.length)) marked.fill(true, at, at + term.length)
+  }
+  let html = ''
+  for (let i = 0; i < text.length; ) {
+    let j = i
+    while (j < text.length && marked[j] === marked[i]) j++
+    html += marked[i] ? `<mark>${escapeHtml(text.slice(i, j))}</mark>` : escapeHtml(text.slice(i, j))
+    i = j
+  }
+  return html
 }
 
 /** Left panel: article list, file tree, outline and folder search, like Typora's sidebar. */
@@ -210,7 +239,7 @@ export class Sidebar {
       row.dataset.kind = isFolder ? 'folder' : 'file'
       row.style.paddingLeft = `${8 + depth * 16}px`
       row.title = node.path
-      row.innerHTML = `<span class="disclosure">${isFolder ? (collapsed ? '▸' : '▾') : ''}</span>${isFolder ? ICONS.folder : ICONS.file}`
+      row.innerHTML = `${disclosure(isFolder, collapsed)}${isFolder ? ICONS.folder : ICONS.file}`
       const label = document.createElement('span')
       label.className = 'tree-label'
       label.textContent = node.name
@@ -244,7 +273,7 @@ export class Sidebar {
       item.style.paddingLeft = `${10 + (heading.level - minLevel) * 16}px`
       item.hidden = hiddenBelow !== Infinity
       item.title = heading.text
-      item.innerHTML = `<span class="disclosure" data-toggle="${index}">${hasChildren ? (collapsed ? '▸' : '▾') : ''}</span>`
+      item.innerHTML = disclosure(hasChildren, collapsed, index)
       const label = document.createElement('span')
       label.className = 'outline-label'
       label.textContent = heading.text
@@ -286,18 +315,14 @@ export class Sidebar {
       container.innerHTML = '<div class="sidebar-empty"><p>没有找到结果</p></div>'
       return
     }
-    const needle = this.searchQuery.trim()
-    const highlight = (text: string) => {
-      const index = text.toLowerCase().indexOf(needle.toLowerCase())
-      if (index < 0) return escapeHtml(text)
-      return `${escapeHtml(text.slice(0, index))}<mark>${escapeHtml(text.slice(index, index + needle.length))}</mark>${escapeHtml(text.slice(index + needle.length))}`
-    }
-    let lastPath = ''
     container.innerHTML = this.searchHits
       .map((hit, index) => {
-        const header = hit.path !== lastPath ? `<div class="search-file" title="${escapeHtml(hit.path)}">${escapeHtml(fileName(hit.path))}</div>` : ''
-        lastPath = hit.path
-        return `${header}<div class="search-hit" data-hit="${index}">${highlight(hit.text)}</div>`
+        const header =
+          hit.path !== this.searchHits[index - 1]?.path
+            ? `<div class="search-file" data-hit="${index}" title="${escapeHtml(hit.path)}">${highlightTerms(fileName(hit.path), this.searchQuery)}</div>`
+            : ''
+        // Line 0 is a file-name match: the file header alone represents it.
+        return hit.line === 0 ? header : `${header}<div class="search-hit" data-hit="${index}">${highlightTerms(hit.text, this.searchQuery)}</div>`
       })
       .join('')
   }
@@ -307,7 +332,7 @@ export class Sidebar {
     if (target.closest('[data-action="open-folder"]')) return this.handlers.onOpenFolder()
 
     const toggle = target.closest<HTMLElement>('[data-toggle]')
-    if (toggle && toggle.textContent) {
+    if (toggle) {
       const index = Number(toggle.dataset.toggle)
       if (this.collapsedHeadings.has(index)) this.collapsedHeadings.delete(index)
       else this.collapsedHeadings.add(index)

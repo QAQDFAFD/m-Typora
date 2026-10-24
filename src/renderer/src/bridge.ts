@@ -53,6 +53,10 @@ function createWebBridge(): MTyporaApi {
     saveAsset: async () => {
       throw new Error('Assets are not supported in browser mode')
     },
+    uploadImages: async () => {
+      throw new Error('浏览器模式不支持上传图片，请在桌面版中使用。')
+    },
+    pathForFile: () => '',
     exportHtml: async (name, html) => {
       download(`${name}.html`, html, 'text/html')
       return `${name}.html`
@@ -61,6 +65,8 @@ function createWebBridge(): MTyporaApi {
       window.print()
       return null
     },
+    listThemes: async () => [],
+    openThemeFolder: () => {},
     print: () => window.print(),
     revealInFinder: () => {},
     openExternal: (url) => window.open(url, '_blank', 'noopener'),
