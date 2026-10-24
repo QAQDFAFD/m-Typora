@@ -49,6 +49,7 @@ export class App {
   private refreshTimer = 0
   private autoSaveTimer = 0
   private footerTimer = 0
+  private pinnedHeading: { index: number; until: number } | null = null
 
   constructor() {
     this.wysiwyg = new WysiwygEditor({
@@ -448,12 +449,26 @@ export class App {
     if (!target) return
     const top = target.getBoundingClientRect().top - this.scroller.getBoundingClientRect().top + this.scroller.scrollTop
     this.scroller.scrollTo({ top: top - 20, behavior: 'smooth' })
+    // The clicked heading stays highlighted while the jump animates (and when the page
+    // cannot scroll far enough to bring it to the top).
+    this.pinnedHeading = { index, until: Date.now() + 1200 }
     this.sidebar.setActiveHeading(index)
   }
 
   private updateActiveHeading(): void {
     if (this.mode === 'source') return
-    const limit = this.scroller.getBoundingClientRect().top + 60
+    if (this.pinnedHeading && Date.now() < this.pinnedHeading.until) {
+      this.sidebar.setActiveHeading(this.pinnedHeading.index)
+      return
+    }
+    const box = this.scroller.getBoundingClientRect()
+    const atBottom = this.scroller.scrollTop + this.scroller.clientHeight >= this.scroller.scrollHeight - 2
+    if (this.pinnedHeading && atBottom) {
+      this.sidebar.setActiveHeading(this.pinnedHeading.index)
+      return
+    }
+    this.pinnedHeading = null
+    const limit = box.top + 60
     let active = -1
     this.wysiwyg.headingElements().forEach((el, index) => {
       if (el.getBoundingClientRect().top <= limit) active = index

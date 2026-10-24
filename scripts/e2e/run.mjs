@@ -1,0 +1,1083 @@
+// m-typora end-to-end suite (see docs/test-plan.md). Run with `npm run test:e2e`.
+// Every interaction uses real mouse / keyboard events; setup opens files the way Finder does.
+import { copyFile, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { existsSync, statSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { basename, join, resolve } from 'node:path'
+import { launch, sleep } from './harness.mjs'
+
+const ROOT = resolve(new URL('../..', import.meta.url).pathname)
+const only = process.argv.slice(2)
+const docs = await mkdtemp(join(tmpdir(), 'm-typora-e2e-docs-'))
+const PIXEL = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAgAAAAIAQMAAAD+wSzIAAAABlBMVEX///+/v7+jQ3Y5AAAADklEQVQI12P4AIX8EAgALgAD/aNpbtEAAAAASUVORK5CYII=', 'base64')
+await writeFile(join(docs, 'pixel.png'), PIXEL)
+
+let counter = 0
+/** Writes a fresh document and returns its path. */
+async function fixture(content, name) {
+  const path = join(docs, name ?? `doc-${++counter}.md`)
+  await writeFile(path, content)
+  return path
+}
+
+const TABLE = '# T\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n\nAfter.\n'
+const results = []
+let app
+
+class Fail extends Error {}
+function expect(condition, message) {
+  if (!condition) throw new Fail(message)
+}
+async function test(id, name, fn) {
+  if (only.length && !only.some((prefix) => id.startsWith(prefix))) return
+  const started = Date.now()
+  try {
+    await fn()
+    results.push({ id, name, ok: true })
+    console.log(`  ✓ ${id} ${name}`)
+  } catch (error) {
+    results.push({ id, name, ok: false, error: error.message })
+    console.log(`  ✗ ${id} ${name}\n      ${error.message}`)
+    await app.screenshot(join(ROOT, 'out', `e2e-fail-${id}.png`)).catch(() => {})
+  }
+  if (Date.now() - started > 20000) console.log(`    (slow: ${Date.now() - started}ms)`)
+}
+
+// ----------------------------------------------------------------- helpers
+const q = (code) => app.page(`return ${code}`)
+const title = () => q(`document.querySelector('#title').textContent`)
+const edited = () => q(`document.documentElement.classList.contains('doc-edited')`)
+const html = (selector) => q(`[...document.querySelectorAll(${JSON.stringify(selector)})].map((e) => e.textContent.trim())`)
+const count = (selector) => q(`document.querySelectorAll(${JSON.stringify(selector)}).length`)
+const visible = (selector) => q(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); return !!e && !e.hidden && !e.closest('[hidden]') && getComputedStyle(e).display !== 'none' })()`)
+const active = () => q(`(() => { const e = document.activeElement; return e.tagName + (e.className ? '.' + String(e.className).split(' ')[0] : '') })()`)
+const caretText = () => q(`getSelection().anchorNode?.parentElement?.closest('td, th, p, li, h1, h2, h3')?.textContent.trim() ?? null`)
+const inTable = () => q(`!!getSelection().anchorNode?.parentElement?.closest('table')`)
+const rows = () => q(`[...document.querySelectorAll('#write table tr')].map((tr) => [...tr.children].map((c) => c.textContent.trim()).join('|'))`)
+const tableState = () =>
+  q(`(() => { const tb = document.querySelector('.md-table-toolbar'), p = tb?.querySelector('.md-table-panel')
+    return { toolbar: !!tb && !tb.hidden, panel: p && !p.hidden ? p.dataset.kind : null, size: tb?.querySelector('.md-table-size')?.textContent } })()`)
+async function save(path) {
+  await app.menu('save')
+  await sleep(200)
+  return readFile(path, 'utf8')
+}
+/** Puts the caret at the end of the document by clicking below the last line. */
+async function clickEnd() {
+  const r = await app.rect('#write .ProseMirror')
+  await app.clickAt(r.left + 40, r.bottom - 4)
+  await app.key('End', ['meta'])
+}
+async function openFresh(content = '') {
+  const path = await fixture(content)
+  await app.answer('message', 1)
+  await app.open(path)
+  return path
+}
+async function hoverFooter() {
+  const r = await app.rect('#footer')
+  await app.main(`win.webContents.sendInputEvent({ type: 'mouseMove', x: ${Math.round(r.left + 40)}, y: ${Math.round(r.top + 10)} }); return true`)
+  await sleep(150)
+}
+
+// ------------------------------------------------------------------- suite
+app = await launch()
+try {
+  console.log('A. 文件与窗口')
+  await test('A1', '启动为空白未命名文档', async () => {
+    expect((await title()) === '未命名', `title ${await title()}`)
+    expect((await q(`document.querySelector('#write .ProseMirror').textContent`)) === '', 'editor not empty')
+  })
+  const basic = await fixture('# Basic\n\nHello world paragraph.\n\nSecond line here.\n', 'basic.md')
+  await test('A2', '从访达打开文件', async () => {
+    await app.open(basic)
+    expect((await title()) === 'basic.md', `title ${await title()}`)
+    expect((await html('#write h1'))[0] === 'Basic', 'h1 not rendered')
+    expect(!(await edited()), 'marked edited after open')
+  })
+  await test('A3', '文件 › 打开…', async () => {
+    const other = await fixture('Opened via dialog.\n', 'dialog.md')
+    await app.answer('open', other)
+    await app.menu('open')
+    expect((await title()) === 'dialog.md', `title ${await title()}`)
+    await app.answer('open', null)
+  })
+  await test('A4', '文件 › 新建', async () => {
+    await app.menu('new')
+    expect((await title()) === '未命名', `title ${await title()}`)
+  })
+  await test('A5', '有未保存修改时打开其他文件会确认', async () => {
+    await app.open(basic)
+    await app.clickText('Hello', 2)
+    await app.type('X')
+    await sleep(400)
+    expect(await edited(), 'not edited after typing')
+    const before = (await app.e2e()).dialogs.length
+    await app.answer('message', 1)
+    await app.open(await fixture('Other.\n', 'other.md'))
+    const dialogs = (await app.e2e()).dialogs
+    expect(dialogs.length > before && dialogs.at(-1)[0] === 'message', 'no confirm dialog')
+    expect((await title()) === 'other.md', `title ${await title()}`)
+  })
+  await test('A6', '修改后保存', async () => {
+    const path = await openFresh('Start.\n')
+    await app.clickText('Start', 5)
+    await app.type(' more')
+    const text = await save(path)
+    expect(text.includes('Start more.'), `saved ${JSON.stringify(text)}`)
+    expect(!(await edited()), 'still marked edited')
+  })
+  await test('A7', '未命名文档另存为', async () => {
+    await app.menu('new')
+    await app.click('#write .ProseMirror')
+    await app.type('Brand new')
+    const target = join(docs, 'saved-as.md')
+    await app.answer('save', target)
+    await app.menu('save')
+    await sleep(200)
+    expect(existsSync(target) && (await readFile(target, 'utf8')).includes('Brand new'), 'file not written')
+    expect((await title()) === 'saved-as.md', `title ${await title()}`)
+    await app.answer('save', null)
+  })
+  await test('A8', '重命名', async () => {
+    const path = await openFresh('Rename me.\n')
+    await app.menu('rename')
+    expect((await q(`document.querySelector('#title').isContentEditable`)) === true, 'title not editable')
+    await app.key('A', ['meta'])
+    await app.type('renamed-doc')
+    await app.key('Enter')
+    await sleep(300)
+    expect(existsSync(join(docs, 'renamed-doc.md')) && !existsSync(path), 'file not renamed on disk')
+    expect((await title()) === 'renamed-doc.md', `title ${await title()}`)
+  })
+  await test('A9', '在访达中显示', async () => {
+    await app.open(basic)
+    await app.menu('reveal-in-finder')
+    const shell = (await app.e2e()).shell
+    expect(shell.some(([kind, arg]) => kind === 'showItemInFolder' && arg === basic), 'not revealed')
+  })
+  await test('A10', '复制文件路径', async () => {
+    await app.main(`await electron.clipboard.writeText(''); return true`)
+    await app.menu('copy-path')
+    await sleep(200)
+    const clip = await app.main(`return electron.clipboard.readText()`)
+    expect(clip === basic, `clipboard ${JSON.stringify(clip)}`)
+  })
+  await test('A11', '导出 HTML', async () => {
+    const target = join(docs, 'export.html')
+    await app.answer('save', target)
+    await app.menu('export-html')
+    await sleep(300)
+    const out = existsSync(target) ? await readFile(target, 'utf8') : ''
+    expect(out.includes('<h1') && out.includes('<style>'), 'html not exported')
+    await app.answer('save', null)
+  })
+  await test('A12', '导出 PDF', async () => {
+    const target = join(docs, 'export.pdf')
+    await app.answer('save', target)
+    await app.menu('export-pdf')
+    await sleep(1500)
+    expect(existsSync(target) && statSync(target).size > 1000, 'pdf not exported')
+    await app.answer('save', null)
+  })
+  await test('A13', '自动保存', async () => {
+    await app.menu('preferences')
+    await app.click('[data-pref="autoSave"]')
+    await app.key('Escape')
+    const path = await openFresh('Auto.\n')
+    await app.clickText('Auto', 4)
+    await app.type(' saved')
+    await sleep(1800)
+    const text = await readFile(path, 'utf8')
+    await app.menu('preferences')
+    await app.click('[data-pref="autoSave"]')
+    await app.key('Escape')
+    expect(text.includes('Auto saved.'), `disk ${JSON.stringify(text)}`)
+  })
+  await test('A15', '重命名时 Esc 取消', async () => {
+    const path = await openFresh('Keep name.\n')
+    const before = await title()
+    await app.menu('rename')
+    await app.type('zzz')
+    await app.key('Escape')
+    await sleep(200)
+    expect((await title()) === before && existsSync(path), `title ${await title()}`)
+    expect((await q(`document.querySelector('#title').isContentEditable`)) === false, 'title still editable')
+  })
+  await test('A14', '标题栏下拉菜单', async () => {
+    await app.open(basic)
+    await app.click('#title-menu')
+    const labels = JSON.stringify(await app.lastPopupLabels())
+    expect(labels.includes('重命名') && labels.includes('复制文件路径') && labels.includes('在访达中显示'), labels)
+  })
+
+  console.log('B. 编辑')
+  await test('B1', '输入 # 生成 1–6 级标题', async () => {
+    await openFresh()
+    await app.click('#write .ProseMirror')
+    for (let n = 1; n <= 6; n++) await app.type(`${'#'.repeat(n)} H${n}\n`)
+    for (let n = 1; n <= 6; n++) expect((await html(`#write h${n}`))[0] === `H${n}`, `h${n} missing`)
+  })
+  const blockCases = [
+    ['引用', '> quote', '#write blockquote'],
+    ['无序列表', '- item', '#write ul li'],
+    ['有序列表', '1. item', '#write ol li'],
+    ['任务列表', '- [ ] task', '#write .md-task-box'],
+    ['代码块', '```js\n', '#write .milkdown-code-block'],
+    ['分割线', '---\n', '#write hr'],
+    ['公式块', '$$\n', '#write .milkdown-code-block']
+  ]
+  for (const [label, input, selector] of blockCases) {
+    await test('B2', `输入生成${label}`, async () => {
+      await openFresh()
+      await app.click('#write .ProseMirror')
+      await app.type(input)
+      expect((await count(selector)) > 0, `${selector} missing`)
+    })
+  }
+  const inlineCases = [
+    ['粗体', '**bold** ', '#write strong', 'bold'],
+    ['斜体', '*em* ', '#write em', 'em'],
+    ['行内代码', '`code` ', '#write p code', 'code'],
+    ['删除线', '~~del~~ ', '#write del', 'del'],
+    ['链接', '[site](https://x.y) ', '#write a', 'site']
+  ]
+  for (const [label, input, selector, text] of inlineCases) {
+    await test('B3', `输入即渲染${label}`, async () => {
+      await openFresh()
+      await app.click('#write .ProseMirror')
+      await app.type(input)
+      expect((await html(selector))[0] === text, `${selector}: ${JSON.stringify(await html('#write p'))}`)
+    })
+  }
+  await test('B4', '光标进入 / 离开粗体显示 / 隐藏标记', async () => {
+    await openFresh('A **strong** word.\n\nOther.\n')
+    await app.clickText('strong', 3)
+    expect((await count('#write .md-meta')) === 2, 'markers not shown')
+    await app.clickText('Other', 2)
+    expect((await count('#write .md-meta')) === 0, 'markers not hidden')
+  })
+  await test('B5', '选中文字后加粗 / 斜体 / 下划线', async () => {
+    await openFresh('one two three\n')
+    const word = await app.page(`
+      const t = document.querySelector('#write p').firstChild; const r = document.createRange(); r.setStart(t, 4); r.setEnd(t, 7)
+      const b = r.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }`)
+    await app.clickAt(word.x, word.y, { clickCount: 2 })
+    await app.menu('strong')
+    expect((await html('#write strong'))[0] === 'two', 'not bold')
+    await app.menu('emphasis')
+    expect((await count('#write em')) === 1, 'not italic')
+    await app.menu('underline')
+    expect((await count('#write u')) === 1, 'not underlined')
+  })
+  await test('B6', '标题快捷命令', async () => {
+    await openFresh('Para\n')
+    await app.clickText('Para', 2)
+    await app.menu('heading-2')
+    expect((await html('#write h2'))[0] === 'Para', 'not h2')
+    await app.menu('heading-up')
+    expect((await html('#write h1'))[0] === 'Para', 'not h1 after ⌘=')
+    await app.menu('heading-down')
+    expect((await html('#write h2'))[0] === 'Para', 'not h2 after ⌘-')
+    await app.menu('paragraph')
+    expect((await count('#write h1, #write h2')) === 0, 'not paragraph')
+  })
+  await test('B7', '撤销 / 重做', async () => {
+    await openFresh('Base\n')
+    await app.clickText('Base', 4)
+    await app.type(' typed')
+    await app.menu('undo')
+    expect(!(await q(`document.querySelector('#write p').textContent`)).includes('typed'), 'undo failed')
+    await app.menu('redo')
+    expect((await q(`document.querySelector('#write p').textContent`)).includes('typed'), 'redo failed')
+  })
+  await test('B8', '括号自动配对', async () => {
+    await openFresh()
+    await app.click('#write .ProseMirror')
+    await app.type('f(x')
+    expect((await q(`document.querySelector('#write p').textContent`)) === 'f(x)', 'no auto pair')
+    await app.type(')')
+    expect((await q(`document.querySelector('#write p').textContent`)) === 'f(x)', 'closer duplicated')
+    await app.type(' [')
+    await app.key('Backspace')
+    expect((await q(`document.querySelector('#write p').textContent`)) === 'f(x) ', 'pair not deleted together')
+  })
+  await test('B9', '列表回车续项、空项退出、Tab 缩进', async () => {
+    await openFresh()
+    await app.click('#write .ProseMirror')
+    await app.type('- a\nb\n')
+    await app.key('Tab')
+    await app.type('nested\n\n\n')
+    await app.type('after')
+    expect((await count('#write ul ul li')) >= 1, 'Tab did not indent')
+    expect((await html('#write .ProseMirror > p')).includes('after'), 'empty item did not exit list')
+  })
+  await test('B10', '点击任务复选框切换', async () => {
+    await openFresh('- [ ] task\n')
+    await app.click('#write .md-task-box')
+    expect((await count('#write .md-task-box.checked')) === 1, 'not checked')
+  })
+  await test('B11', '输入中文', async () => {
+    await openFresh()
+    await app.click('#write .ProseMirror')
+    await app.type('中文输入测试')
+    expect((await q(`document.querySelector('#write p').textContent`)) === '中文输入测试', 'chinese missing')
+  })
+  await test('B12', '输入法组字（段落、列表、表格）', async () => {
+    const path = await openFresh('Para\n\n- item\n\n| a | b |\n| --- | --- |\n| c | d |\n')
+    await app.clickText('Para', 1)
+    await app.key('End')
+    await app.ime('zhong', '中')
+    await app.clickText('item', 1)
+    await app.key('End')
+    await app.ime('wen', '文')
+    await app.clickText('c', 0, '#write table')
+    await app.key('End')
+    await app.ime('biao', '表')
+    const text = await save(path)
+    expect(text.includes('Para中') && text.includes('- item文') && text.includes('c表'), `saved ${JSON.stringify(text)}`)
+    expect(!/zhong|wen|biao/.test(text), 'composition text left behind')
+  })
+  await test('B13', '代码块选择语言', async () => {
+    const path = await openFresh('```js\nlet x = 1\n```\n')
+    await sleep(300)
+    await app.click('#write .milkdown-code-block .cm-line')
+    await app.click('#write .milkdown-code-block .language-button')
+    expect(await visible('#write .milkdown-code-block .list-wrapper'), 'language list not shown')
+    await app.click('#write .milkdown-code-block .list-wrapper .search-input')
+    expect(await visible('#write .milkdown-code-block .list-wrapper'), 'list vanished after clicking its search box')
+    await app.type('pyth')
+    await app.click('#write .milkdown-code-block .language-list-item', 'Python')
+    const text = await save(path)
+    expect(text.startsWith('```python'), `saved ${JSON.stringify(text)}`)
+  })
+
+  console.log('C. 表格')
+  await test('B15', '粘贴 Markdown 纯文本', async () => {
+    const path = await openFresh()
+    await app.click('#write .ProseMirror')
+    await app.main(`await electron.clipboard.writeText('**bold** and [link](https://x.y)\\n\\n- one\\n- two'); return true`)
+    await app.key('V', ['meta'])
+    expect((await html('#write strong'))[0] === 'bold', 'bold not parsed')
+    expect((await q(`document.querySelector('#write a')?.getAttribute('href')`)) === 'https://x.y', 'link not parsed')
+    expect((await html('#write ul li')).length === 2, 'list not parsed')
+    const text = await save(path)
+    expect(text.includes('**bold** and [link](https://x.y)') && text.includes('- two'), `saved ${JSON.stringify(text)}`)
+  })
+  await test('B16', '粘贴网页富文本', async () => {
+    const path = await openFresh()
+    await app.click('#write .ProseMirror')
+    await app.main(`await electron.clipboard.write([new electron.ClipboardItem({ 'text/html': '<p><b>Hi</b> <i>there</i> <a href="https://a.b">site</a></p>', 'text/plain': 'Hi there site' })]); return true`)
+    await app.key('V', ['meta'])
+    const text = await save(path)
+    expect(text.trim() === '**Hi** *there* [site](https://a.b)', `saved ${JSON.stringify(text)}`)
+  })
+  await test('B17', '代码块内粘贴保持原样', async () => {
+    const path = await openFresh('```\nx\n```\n')
+    await sleep(300)
+    await app.click('#write .milkdown-code-block .cm-line')
+    await app.key('End')
+    await app.main(`await electron.clipboard.writeText('**not bold**\\n- not list'); return true`)
+    await app.key('V', ['meta'])
+    const text = await save(path)
+    expect(text === '```\nx**not bold**\n- not list\n```\n', `saved ${JSON.stringify(text)}`)
+  })
+  await test('B18', '文档内复制粘贴保留格式', async () => {
+    const path = await openFresh('Some **strong** word.\n\nTarget: \n')
+    await app.clickText('strong', 2)
+    await app.clickAt(...Object.values(await app.page(`
+      const t = [...document.querySelectorAll('#write strong')].pop().firstChild; const r = document.createRange(); r.setStart(t, 2); r.setEnd(t, 3)
+      const b = r.getBoundingClientRect(); return { x: b.left + 1, y: b.top + b.height / 2 }`)), { clickCount: 2 })
+    await app.key('C', ['meta'])
+    await app.clickText('Target', 1)
+    await app.key('End')
+    await app.key('V', ['meta'])
+    const text = await save(path)
+    expect(text.includes('Target: **strong**') || text.includes('Target:**strong**'), `saved ${JSON.stringify(text)}`)
+  })
+  await test('C1', '插入表格', async () => {
+    await openFresh('x\n')
+    await app.clickText('x', 1)
+    await app.menu('table')
+    expect((await count('#write table')) === 1, 'no table')
+    expect((await tableState()).toolbar, 'toolbar not shown')
+  })
+  await test('C2', '输入 | a | b | 回车建表', async () => {
+    await openFresh()
+    await app.click('#write .ProseMirror')
+    await app.type('| a | b |\n')
+    expect((await html('#write th')).join(',') === 'a,b', `headers ${await html('#write th')}`)
+    expect(await inTable(), 'caret not in table')
+  })
+  await test('C3', '工具栏随光标出现 / 消失', async () => {
+    await openFresh(TABLE)
+    await app.clickText('1', 0, '#write table')
+    expect((await tableState()).toolbar, 'not shown')
+    await app.clickText('After', 2)
+    expect(!(await tableState()).toolbar, 'not hidden')
+  })
+  await test('C4', '调整行列：点击输入框时面板不消失', async () => {
+    await openFresh(TABLE)
+    await app.clickText('1', 0, '#write table')
+    await app.click('.md-table-toolbar [data-action="resize"]')
+    expect((await tableState()).panel === 'resize', 'panel not opened')
+    await app.click('.md-table-panel input[name="rows"]')
+    expect((await tableState()).panel === 'resize', 'panel vanished after clicking input')
+    expect((await active()).startsWith('INPUT'), `focus on ${await active()}`)
+    await app.key('A', ['meta'])
+    await app.type('5')
+    await app.click('.md-table-panel input[name="cols"]')
+    expect((await tableState()).panel === 'resize', 'panel vanished after clicking cols')
+    await app.key('A', ['meta'])
+    await app.type('3')
+    await app.key('Enter')
+    const st = await tableState()
+    expect(st.size === '5 × 3', `size ${st.size}`)
+    expect(st.panel === null, 'panel still open')
+    expect(await inTable(), 'caret not back in table')
+  })
+  await test('B14', '语言列表：点代码内容或别处时关闭', async () => {
+    await openFresh('```js\nlet x = 1\n```\n\nAfter.\n')
+    await sleep(300)
+    await app.click('#write .milkdown-code-block .cm-line')
+    await app.click('#write .milkdown-code-block .language-button')
+    expect(await visible('#write .milkdown-code-block .list-wrapper'), 'language list not shown')
+    await app.click('#write .milkdown-code-block .cm-line')
+    expect(!(await visible('#write .milkdown-code-block .list-wrapper')), 'list stays open after clicking the code')
+    await app.click('#write .milkdown-code-block .language-button')
+    await app.clickText('After', 2)
+    expect(!(await visible('#write .milkdown-code-block .list-wrapper')), 'list stays open after clicking outside')
+  })
+  await test('C4b', '调整行列：点“确定”按钮', async () => {
+    await openFresh(TABLE)
+    await app.clickText('1', 0, '#write table')
+    await app.click('.md-table-toolbar [data-action="resize"]')
+    await app.click('.md-table-panel input[name="cols"]')
+    await app.key('A', ['meta'])
+    await app.type('4')
+    await app.click('.md-table-panel .md-table-apply')
+    expect((await tableState()).size === '3 × 4', `size ${(await tableState()).size}`)
+    expect(await inTable(), 'caret not back in table')
+  })
+  await test('C5', '尺寸面板 Esc 关闭', async () => {
+    await openFresh(TABLE)
+    await app.clickText('1', 0, '#write table')
+    await app.click('.md-table-toolbar [data-action="resize"]')
+    await app.click('.md-table-panel input[name="rows"]')
+    await app.key('Escape')
+    expect((await tableState()).panel === null, 'panel open')
+    expect((await active()).startsWith('DIV.ProseMirror'), `focus ${await active()}`)
+  })
+  await test('C6', '列居中', async () => {
+    const path = await openFresh(TABLE)
+    await app.clickText('2', 0, '#write table')
+    await app.click('.md-table-toolbar [data-cmd="table-align-center"]')
+    expect(await q(`document.querySelector('.md-table-toolbar [data-cmd="table-align-center"]').classList.contains('active')`), 'button not active')
+    const text = await save(path)
+    expect(/\|\s*-+\s*\|\s*:-+:\s*\|/.test(text), `saved ${JSON.stringify(text)}`)
+  })
+  await test('C7', '“⋯”下拉在点击别处后关闭', async () => {
+    await openFresh(TABLE)
+    await app.clickText('1', 0, '#write table')
+    await app.click('.md-table-toolbar [data-action="more"]')
+    expect((await tableState()).panel === 'more', 'not opened')
+    await app.clickText('4', 0, '#write table')
+    expect((await tableState()).panel === null, 'still open after clicking another cell')
+    await app.click('.md-table-toolbar [data-action="more"]')
+    await app.clickText('After', 2)
+    expect((await tableState()).panel === null, 'still open after clicking outside')
+    await app.clickText('1', 0, '#write table')
+    await app.click('.md-table-toolbar [data-action="more"]')
+    await app.click('.md-table-toolbar [data-action="more"]')
+    expect((await tableState()).panel === null, 'not toggled closed')
+  })
+  const moreCases = [
+    ['下方插入行', '1', 'table-row-below', ['a|b', '1|2', '|', '3|4']],
+    ['上方插入行', '3', 'table-row-above', ['a|b', '1|2', '|', '3|4']],
+    ['左侧插入列', '1', 'table-col-left', ['|a|b', '|1|2', '|3|4']],
+    ['右侧插入列', '1', 'table-col-right', ['a||b', '1||2', '3||4']],
+    ['下移该行', '1', 'table-row-down', ['a|b', '3|4', '1|2']],
+    ['上移该行', '3', 'table-row-up', ['a|b', '3|4', '1|2']],
+    ['右移该列', '1', 'table-col-move-right', ['b|a', '2|1', '4|3']],
+    ['左移该列', '2', 'table-col-move-left', ['b|a', '2|1', '4|3']],
+    ['删除行', '1', 'table-delete-row', ['a|b', '3|4']],
+    ['删除列', '1', 'table-delete-col', ['b', '2', '4']]
+  ]
+  for (const [label, cell, cmd, expected] of moreCases) {
+    await test('C8', `更多 › ${label}`, async () => {
+      await openFresh(TABLE)
+      await app.clickText(cell, 0, '#write table')
+      await app.click('.md-table-toolbar [data-action="more"]')
+      await app.click(`.md-table-panel [data-cmd="${cmd}"]`)
+      const got = await rows()
+      expect(JSON.stringify(got) === JSON.stringify(expected), `rows ${JSON.stringify(got)}`)
+      expect((await tableState()).panel === null, 'panel still open')
+    })
+  }
+  await test('C9', '删除表格', async () => {
+    await openFresh(TABLE)
+    await app.clickText('1', 0, '#write table')
+    await app.click('.md-table-toolbar [data-cmd="table-delete"]')
+    expect((await count('#write table')) === 0, 'table remains')
+  })
+  await test('C10', '单元格回车跳到下一行，末行离开表格', async () => {
+    await openFresh(TABLE)
+    await app.clickText('1', 1, '#write table')
+    await app.key('Enter')
+    expect((await caretText()) === '3', `caret in ${await caretText()}`)
+    await app.key('Enter')
+    expect(!(await inTable()), 'still in table')
+  })
+  await test('C11', 'Tab / ⇧Tab 移动单元格', async () => {
+    await openFresh(TABLE)
+    await app.clickText('1', 1, '#write table')
+    await app.key('Tab')
+    expect((await caretText()) === '2', `caret in ${await caretText()}`)
+    await app.key('Tab', ['shift'])
+    expect((await caretText()) === '1', `caret in ${await caretText()}`)
+  })
+  await test('C12', '⌘↩ 插入行、⇧⌘⌫ 删除行、表头不可删', async () => {
+    await openFresh(TABLE)
+    await app.clickText('1', 1, '#write table')
+    await app.key('Enter', ['meta'])
+    expect((await rows()).length === 4, `rows ${JSON.stringify(await rows())}`)
+    await app.key('Backspace', ['meta', 'shift'])
+    expect((await rows()).length === 3, `rows ${JSON.stringify(await rows())}`)
+    await app.menu('table-row-below')
+    expect((await rows()).length === 4, 'menu ⌘↩ path failed')
+    await app.clickText('a', 1, '#write table')
+    await app.key('Backspace', ['meta', 'shift'])
+    expect((await rows())[0] === 'a|b', 'header deleted')
+  })
+  await test('C13', '单元格内输入中文与粗体并保存', async () => {
+    const path = await openFresh(TABLE)
+    await app.clickText('1', 1, '#write table')
+    await app.type(' 中文 **粗** ')
+    const text = await save(path)
+    expect(/\| 1 中文 \*\*粗\*\* *\|/.test(text), `saved ${JSON.stringify(text)}`)
+  })
+  await test('C14', '右键 › 表格 › 下方插入行', async () => {
+    await openFresh(TABLE)
+    await app.clickText('1', 0, '#write table')
+    const r = await app.rect('#write td', '1')
+    await app.clickAt(r.x, r.y, { button: 'right' })
+    const labels = JSON.stringify(await app.lastPopupLabels())
+    expect(labels.includes('"表格"'), `no 表格 submenu: ${labels}`)
+    await app.clickPopupItem(['表格', '下方插入行'])
+    expect((await rows()).length === 4, `rows ${JSON.stringify(await rows())}`)
+  })
+  await test('C15', '工具栏不遮挡上方文字', async () => {
+    await openFresh('# Heading above\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n')
+    await app.clickText('1', 0, '#write table')
+    const tb = await app.rect('.md-table-toolbar')
+    const h = await app.rect('#write h1')
+    const table = await app.rect('#write table')
+    expect(tb.bottom <= table.top + 1, 'toolbar overlaps table')
+    expect(tb.top >= h.bottom - 2, `toolbar covers heading (${tb.top} < ${h.bottom})`)
+  })
+
+  console.log('D. 链接与图片')
+  await test('D1', '选中文字 ⌘K 生成链接', async () => {
+    await openFresh('Plain words to link.\n')
+    const word = await app.page(`
+      const t = document.querySelector('#write p').firstChild; const r = document.createRange(); r.setStart(t, 6); r.setEnd(t, 11)
+      const b = r.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }`)
+    await app.clickAt(word.x, word.y, { clickCount: 2 })
+    await app.menu('link')
+    expect(await visible('.md-link-editor'), 'editor not shown')
+    expect((await active()).startsWith('INPUT'), `focus ${await active()}`)
+    await app.type('https://ex.com')
+    await app.key('Enter')
+    expect((await q(`document.querySelector('#write a')?.getAttribute('href')`)) === 'https://ex.com', 'no link')
+    expect(!(await visible('.md-link-editor')), 'editor still open')
+  })
+  await test('D2', '修改并清空链接', async () => {
+    await openFresh('A [site](https://old.com) link.\n')
+    await app.clickText('site', 2)
+    await app.menu('link')
+    expect((await q(`document.querySelector('.md-link-editor input').value`)) === 'https://old.com', 'href not prefilled')
+    await app.key('A', ['meta'])
+    await app.key('Backspace')
+    await app.key('Enter')
+    expect((await count('#write a')) === 0, 'link not removed')
+  })
+  await test('D3', '链接编辑框 Esc 关闭', async () => {
+    await openFresh('A [site](https://old.com) link.\n')
+    await app.clickText('site', 2)
+    await app.menu('link')
+    await app.type('zzz')
+    await app.key('Escape')
+    expect(!(await visible('.md-link-editor')), 'not closed')
+    expect((await q(`document.querySelector('#write a').getAttribute('href')`)) === 'https://old.com', 'href changed')
+  })
+  await test('D4', '⌘ + 单击打开链接', async () => {
+    await openFresh('A [site](https://open.me) link.\n')
+    const r = await app.rect('#write a')
+    await app.clickAt(r.x, r.y, { modifiers: ['meta'] })
+    const shell = (await app.e2e()).shell
+    expect(shell.some(([k, url]) => k === 'openExternal' && url === 'https://open.me'), 'not opened')
+  })
+  await test('D5', '悬停链接显示提示', async () => {
+    await openFresh('A [site](https://hover.me) link.\n')
+    const r = await app.rect('#write a')
+    // Move off the link first so entering it fires mouseover, as a real pointer would.
+    await app.main(`win.webContents.sendInputEvent({ type: 'mouseMove', x: 5, y: 300 }); return true`)
+    await sleep(80)
+    await app.main(`win.webContents.sendInputEvent({ type: 'mouseMove', x: ${Math.round(r.x)}, y: ${Math.round(r.y)} }); return true`)
+    await sleep(150)
+    const tip = await q(`document.querySelector('#write a').title`)
+    expect(tip.includes('https://hover.me') && tip.includes('单击打开'), `title ${JSON.stringify(tip)}`)
+  })
+  await test('D8', '链接编辑框点击别处时保存', async () => {
+    await openFresh('Plain words to link.\n\nElsewhere.\n')
+    const word = await app.page(`
+      const t = document.querySelector('#write p').firstChild; const r = document.createRange(); r.setStart(t, 6); r.setEnd(t, 11)
+      const b = r.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }`)
+    await app.clickAt(word.x, word.y, { clickCount: 2 })
+    await app.menu('link')
+    await app.type('https://blur.me')
+    await app.clickText('Elsewhere', 3)
+    expect(!(await visible('.md-link-editor')), 'editor still open')
+    expect((await q(`document.querySelector('#write a')?.getAttribute('href')`)) === 'https://blur.me', 'link not applied')
+  })
+  await test('D9', '图片路径框点别处时关闭', async () => {
+    await openFresh('Text ![pic](a.png) end.\n\nOther line.\n')
+    await app.click('#write .md-image')
+    expect(await visible('#write .md-image-source'), 'source box not shown')
+    await app.clickText('Other', 2)
+    expect(!(await visible('#write .md-image-source')), 'source box still shown')
+  })
+  await test('D6', '插入图片并输入路径', async () => {
+    await openFresh()
+    await app.click('#write .ProseMirror')
+    await app.menu('image')
+    expect(await visible('.md-image-source'), 'source box not shown')
+    expect((await active()).startsWith('INPUT'), `focus ${await active()}`)
+    await app.type('pixel.png')
+    await app.key('Enter')
+    await sleep(300)
+    const img = await q(`(() => { const i = document.querySelector('#write .md-image img'); return i && { src: i.getAttribute('src'), w: i.naturalWidth } })()`)
+    expect(img && img.src.endsWith('pixel.png') && img.w > 0, `img ${JSON.stringify(img)}`)
+  })
+  await test('D7', '单击图片修改 alt', async () => {
+    const path = await openFresh('![](pixel.png)\n')
+    await sleep(200)
+    await app.click('#write .md-image img')
+    expect(await visible('.md-image-source'), 'source not shown on click')
+    await app.click('.md-image-source')
+    await app.key('A', ['meta'])
+    await app.type('![dot](pixel.png)')
+    await app.key('Enter')
+    const text = await save(path)
+    expect(text.includes('![dot](pixel.png)'), `saved ${JSON.stringify(text)}`)
+  })
+
+  console.log('E. 扩展语法')
+  const syntax = join(docs, 'syntax.md')
+  await copyFile(join(ROOT, 'samples/syntax.md'), syntax)
+  await test('E1', '扩展语法渲染', async () => {
+    await app.answer('message', 1)
+    await app.open(syntax)
+    // Code blocks (math, diagrams) render once scrolled into view, as for a reader.
+    for (const y of [400, 800, 1200, 1600, 2400]) {
+      await app.page(`document.querySelector('#scroller').scrollTop = ${y}; return 1`)
+      await sleep(400)
+    }
+    await sleep(2500)
+    const got = await q(`({
+      mark: document.querySelectorAll('#write mark.md-highlight').length, sup: document.querySelectorAll('#write sup.md-sup').length,
+      sub: document.querySelectorAll('#write sub.md-sub').length, emoji: document.querySelectorAll('#write .md-emoji').length,
+      u: document.querySelectorAll('#write u').length, kbd: document.querySelectorAll('#write kbd').length,
+      alerts: document.querySelectorAll('#write .md-alert').length, toc: document.querySelectorAll('#write .md-toc-item').length,
+      diagram: !!document.querySelector('#write .md-diagram svg'), katex: document.querySelectorAll('#write .katex').length,
+      htmlBlock: !!document.querySelector('#write .md-html-block') })`)
+    const missing = Object.entries(got).filter(([, v]) => !v).map(([k]) => k)
+    expect(missing.length === 0, `missing ${missing.join(', ')}`)
+  })
+  await test('E2', '点击目录跳转', async () => {
+    await app.page(`document.querySelector('#scroller').scrollTop = 0; return 1`)
+    await app.click('#write .md-toc-item', 'Math')
+    await sleep(800)
+    const got = await q(`(() => { const s = document.querySelector('#scroller'); const h = [...document.querySelectorAll('#write h2')].find((e) => e.textContent === 'Math')
+      return { delta: Math.round(h.getBoundingClientRect().top - s.getBoundingClientRect().top), atBottom: s.scrollTop + s.clientHeight >= s.scrollHeight - 2, visible: h.getBoundingClientRect().bottom < s.getBoundingClientRect().bottom } })()`)
+    // Near the end of a document the heading cannot reach the top; it must at least be in view.
+    expect((got.delta >= -5 && got.delta < 120) || (got.atBottom && got.visible), `heading ${JSON.stringify(got)}`)
+  })
+  await test('E3', '光标进入高亮显示 ==', async () => {
+    await app.clickText('highlighted', 3)
+    const metas = await html('#write .md-meta-inline')
+    expect(metas.filter((m) => m === '==').length === 2, `metas ${JSON.stringify(metas)}`)
+  })
+  await test('E4', '编辑行内公式', async () => {
+    const path = await openFresh('Inline $a+b$ math.\n')
+    await sleep(300)
+    await app.click('#write [data-type="math_inline"]')
+    expect(await visible('.milkdown-latex-inline-edit'), 'math editor not shown')
+    await app.click('.milkdown-latex-inline-edit .ProseMirror')
+    expect(await visible('.milkdown-latex-inline-edit'), 'math editor vanished after clicking into it')
+    await app.key('A', ['meta'])
+    await app.type('c^2')
+    await app.key('Enter')
+    await sleep(200)
+    const text = await save(path)
+    expect(text.includes('$c^2$'), `saved ${JSON.stringify(text)}`)
+  })
+
+  console.log('F. 源码模式')
+  await test('E5', '行内公式编辑框：点别处保存 / Esc 不改', async () => {
+    const path = await openFresh('Inline $a+b$ math.\n\nNext paragraph.\n\n## Far heading\n')
+    await sleep(300)
+    const shown = () => q(`document.querySelector('.milkdown-latex-inline-edit')?.dataset.show === 'true'`)
+    await app.click('#write [data-type="math_inline"]')
+    expect(await shown(), 'math editor not shown')
+    await app.click('.milkdown-latex-inline-edit .ProseMirror')
+    await app.key('End')
+    await app.type('+c')
+    await app.clickText('Far', 2)
+    expect(!(await shown()), 'still shown after clicking elsewhere')
+    expect((await save(path)).includes('$a+b+c$'), 'edit lost when clicking elsewhere')
+    await app.click('#write [data-type="math_inline"]')
+    await app.clickText('math', 2)
+    expect(!(await shown()), 'still shown after clicking the same paragraph')
+    await app.click('#write [data-type="math_inline"]')
+    await app.click('.milkdown-latex-inline-edit .ProseMirror')
+    await app.key('End')
+    await app.type('+d')
+    await app.key('Escape')
+    expect(!(await shown()), 'still shown after Esc')
+    expect(await q(`document.querySelector('#write .ProseMirror').contains(document.activeElement)`), 'caret not back in the document')
+    expect((await save(path)).includes('$a+b+c$'), 'Esc changed the formula')
+  })
+  await test('F1', '切换源代码模式', async () => {
+    await app.open(basic)
+    await app.menu('toggle-source')
+    expect(await visible('#source'), 'source hidden')
+    expect((await q(`document.querySelector('#source .cm-content').textContent`)).includes('# Basic'), 'markdown missing')
+    expect((await app.menuChecked('toggle-source')) === true, 'menu not checked')
+  })
+  await test('F2', '源码编辑后切回', async () => {
+    await app.clickText('Second line here', 16, '#source')
+    await app.type(' EDIT')
+    await app.menu('toggle-source')
+    expect(await visible('#wysiwyg'), 'wysiwyg hidden')
+    expect((await q(`document.querySelector('#write').textContent`)).includes('Second line here EDIT.'), 'edit missing')
+  })
+  await test('F3', '源码模式查找', async () => {
+    await app.menu('toggle-source')
+    await app.menu('find')
+    expect((await count('#source .cm-search')) === 1, 'no CodeMirror search panel')
+    await app.key('Escape')
+    await app.menu('toggle-source')
+  })
+
+  console.log('G. 查找替换')
+  await test('G1', '查找计数与高亮', async () => {
+    await openFresh('apple Apple apple pie. Banana apple.\n')
+    await app.click('#write .ProseMirror')
+    await app.menu('find')
+    expect((await active()).startsWith('INPUT.find-input'), `focus ${await active()}`)
+    await app.type('apple')
+    expect((await q(`document.querySelector('.find-count').textContent`)) === '1 / 4', `count ${await q(`document.querySelector('.find-count').textContent`)}`)
+    expect((await count('#write .md-search-hit')) === 4, 'highlights')
+  })
+  await test('G2', '回车 / ⇧回车', async () => {
+    await app.key('Enter')
+    expect((await q(`document.querySelector('.find-count').textContent`)) === '2 / 4', 'next')
+    await app.key('Enter', ['shift'])
+    expect((await q(`document.querySelector('.find-count').textContent`)) === '1 / 4', 'prev')
+  })
+  await test('G3', '区分大小写', async () => {
+    await app.click('.find-toggle[data-toggle="case"]')
+    expect((await q(`document.querySelector('.find-count').textContent`)).endsWith('/ 3'), 'case-sensitive count')
+    await app.click('.find-toggle[data-toggle="case"]')
+  })
+  await test('G4', '替换与全部替换', async () => {
+    await app.menu('replace')
+    expect(await visible('.replace-input'), 'replace row hidden')
+    await app.click('.replace-input')
+    await app.type('pear')
+    await app.click('[data-action="replace"]')
+    expect((await q(`document.querySelector('.find-count').textContent`)).endsWith('/ 3'), 'replace one')
+    await app.click('[data-action="replace-all"]')
+    expect((await q(`document.querySelector('.find-count').textContent`)) === '无结果', 'replace all')
+    expect((await q(`document.querySelector('#write p').textContent`)).split('pear').length === 5, 'text not replaced')
+  })
+  await test('G5', 'Esc 关闭查找', async () => {
+    await app.click('.find-input')
+    await app.key('Escape')
+    expect(!(await visible('#findbar')), 'findbar open')
+    expect((await count('#write .md-search-hit')) === 0, 'highlights remain')
+  })
+
+  console.log('H. 侧边栏')
+  const folder = join(docs, 'folder')
+  await mkdir(join(folder, 'sub'), { recursive: true })
+  await writeFile(join(folder, 'alpha.md'), '# Alpha\n\nFirst file.\n')
+  await writeFile(join(folder, 'beta.md'), '# Beta\n\nHas a needle inside.\n')
+  await writeFile(join(folder, 'sub', 'gamma.md'), '# Gamma\n\nNested.\n')
+  await test('H1', '⇧⌘L 开关侧边栏', async () => {
+    const open = await q(`document.documentElement.classList.contains('sidebar-open')`)
+    await app.menu('toggle-sidebar')
+    expect((await q(`document.documentElement.classList.contains('sidebar-open')`)) === !open, 'not toggled')
+    await app.menu('toggle-sidebar')
+  })
+  await test('H2', '大纲跳转与高亮', async () => {
+    await openFresh(['# First', ...Array.from({ length: 30 }, (_, i) => `Line ${i}.`), '## Second', ...Array.from({ length: 30 }, (_, i) => `More ${i}.`), '## Third', 'End.'].join('\n\n'))
+    await app.menu('view-outline')
+    await app.click('.outline-item', 'Third')
+    await sleep(800)
+    expect((await q(`document.querySelector('.outline-item.active')?.textContent`)) === 'Third', 'not active')
+  })
+  await test('H3', '打开文件夹显示文档列表', async () => {
+    await app.answer('open', folder)
+    await app.menu('open-folder')
+    await sleep(400)
+    expect((await count('.article')) === 3, `articles ${await count('.article')}`)
+    expect((await q(`document.querySelector('.sidebar-title').textContent`)) === '文档', 'title')
+    await app.answer('open', null)
+  })
+  await test('H4', '点击文档打开', async () => {
+    await app.click('.article', 'beta')
+    expect((await title()) === 'beta.md', `title ${await title()}`)
+    expect((await q(`document.querySelector('.article.active')?.textContent.includes('beta')`)) === true, 'not highlighted')
+  })
+  await test('H5', '文件树展开 / 折叠 / 打开', async () => {
+    await app.click('.sidebar-button[data-view="tree"]')
+    expect((await count('.tree-row')) >= 5, 'tree rows')
+    await app.click('.tree-row[data-kind="folder"]', 'sub')
+    expect(!(await q(`[...document.querySelectorAll('.tree-row')].some((r) => r.textContent.includes('gamma'))`)), 'not collapsed')
+    await app.click('.tree-row[data-kind="folder"]', 'sub')
+    await app.click('.tree-row[data-kind="file"]', 'gamma')
+    expect((await title()) === 'gamma.md', `title ${await title()}`)
+  })
+  await test('H6', '文件夹搜索', async () => {
+    await app.click('.sidebar-button[data-view="search"]')
+    await app.click('.search-input')
+    await app.type('needle')
+    await sleep(600)
+    expect((await count('.search-hit')) === 1, `hits ${await count('.search-hit')}`)
+    await app.click('.search-hit')
+    await sleep(300)
+    expect((await title()) === 'beta.md', `title ${await title()}`)
+    expect(await visible('#findbar'), 'findbar not opened on hit')
+    await app.click('.find-input')
+    await app.key('Escape')
+  })
+  await test('H8', '拖动调整侧边栏宽度', async () => {
+    const before = (await app.rect('#sidebar')).width
+    const handle = await app.rect('#sidebar-resizer')
+    await app.drag({ x: handle.x, y: handle.y }, { x: handle.x + 80, y: handle.y })
+    const after = (await app.rect('#sidebar')).width
+    expect(Math.abs(after - before - 80) <= 4, `width ${before} → ${after}`)
+    await app.drag({ x: handle.x + 80, y: handle.y }, { x: handle.x, y: handle.y })
+  })
+  await test('H7', '底部按钮切换视图', async () => {
+    await app.click('.sidebar-button[data-view="outline"]')
+    expect((await q(`document.querySelector('.sidebar-title').textContent`)) === '大纲', 'outline')
+    await app.click('.sidebar-button[data-view="articles"]')
+    expect((await q(`document.querySelector('.sidebar-title').textContent`)) === '文档', 'articles')
+  })
+
+  console.log('I. 快速打开')
+  await test('I1', '模糊搜索并打开', async () => {
+    await app.menu('open-quickly')
+    expect(await visible('#quick-open'), 'not shown')
+    await app.type('gam')
+    expect((await q(`document.querySelector('.quick-open-item .quick-open-name')?.textContent`)) === 'gamma.md', 'gamma not first')
+    await app.key('Enter')
+    expect((await title()) === 'gamma.md', `title ${await title()}`)
+  })
+  await test('I2', 'Esc 关闭', async () => {
+    await app.menu('open-quickly')
+    await app.key('Escape')
+    expect(!(await visible('#quick-open')), 'still open')
+  })
+  await test('I3', '点击外部关闭', async () => {
+    await app.menu('open-quickly')
+    await app.clickAt(30, 600)
+    expect(!(await visible('#quick-open')), 'still open')
+  })
+
+  console.log('J. 主题与视图')
+  await test('J1', '主题菜单切换与勾选', async () => {
+    for (const theme of ['night', 'gothic', 'newsprint', 'pixyll', 'whitey', 'github']) {
+      await app.clickMenuItem(`theme-${theme}`)
+      expect((await q(`document.documentElement.dataset.theme`)) === theme, `theme ${theme} not applied`)
+      expect((await app.menuChecked(`theme-${theme}`)) === true, `menu not checked for ${theme}`)
+    }
+  })
+  await test('J2', '专注模式', async () => {
+    await openFresh('First para.\n\nSecond para.\n')
+    await app.menu('toggle-focus')
+    await app.clickText('Second', 2)
+    await sleep(400) // the fade is a 0.2s transition
+    const op = await q(`[...document.querySelectorAll('#write .ProseMirror > p')].map((p) => getComputedStyle(p).opacity)`)
+    await app.menu('toggle-focus')
+    expect(Number(op[0]) < 0.5 && Number(op[1]) === 1, `opacity ${op}`)
+  })
+  await test('J3', '打字机模式', async () => {
+    await openFresh(Array.from({ length: 80 }, (_, i) => `Paragraph ${i}.`).join('\n\n'))
+    await app.menu('toggle-typewriter')
+    await app.clickText('Paragraph 40', 5)
+    await app.type(' x')
+    await sleep(600)
+    const got = await q(`(() => { const sel = getSelection(); if (!sel.rangeCount) return { error: 'no selection', active: document.activeElement.className }
+      const range = sel.getRangeAt(0); const r = range.getClientRects()[0] ?? range.startContainer.parentElement.getBoundingClientRect()
+      const s = document.querySelector('#scroller').getBoundingClientRect(); return { off: Math.round(r.top - (s.top + s.height / 2)), text: range.startContainer.textContent.slice(0, 20) } })()`)
+    await app.menu('toggle-typewriter')
+    expect(got && Math.abs(got.off) < 80, `caret ${JSON.stringify(got)}`)
+  })
+  await test('J4', '显示 / 隐藏状态栏', async () => {
+    await app.menu('toggle-statusbar')
+    expect(!(await visible('#footer')), 'footer visible')
+    await app.menu('toggle-statusbar')
+  })
+  await test('J5', '缩放', async () => {
+    await app.menu('zoom-in')
+    const z1 = await q(`getComputedStyle(document.documentElement).getPropertyValue('--zoom')`)
+    await app.menu('zoom-reset')
+    const z2 = await q(`getComputedStyle(document.documentElement).getPropertyValue('--zoom')`)
+    expect(z1.trim() === '1.1' && z2.trim() === '1', `zoom ${z1} ${z2}`)
+  })
+
+  console.log('K. 状态栏')
+  await test('K1', '鼠标移动显示、打字隐藏', async () => {
+    await openFresh('Text.\n')
+    await hoverFooter()
+    expect(await q(`document.documentElement.classList.contains('footer-visible')`), 'not shown on mouse move')
+    await app.clickText('Text', 2)
+    await app.type('a')
+    await sleep(400)
+    expect(!(await q(`document.documentElement.classList.contains('footer-visible')`)), 'not hidden while typing')
+  })
+  await test('K2', '字数弹层', async () => {
+    await hoverFooter()
+    await app.click('#word-count')
+    expect(await visible('#word-count-popover'), 'popover not shown')
+    await app.clickText('Te', 1)
+    expect(!(await visible('#word-count-popover')), 'popover not closed')
+  })
+  await test('K3', '状态栏按钮', async () => {
+    await hoverFooter()
+    await app.click('#toggle-mode')
+    expect(await q(`document.documentElement.classList.contains('source-mode')`), 'source not toggled')
+    await hoverFooter()
+    await app.click('#toggle-mode')
+    await hoverFooter()
+    const open = await q(`document.documentElement.classList.contains('sidebar-open')`)
+    await app.click('#toggle-sidebar')
+    expect((await q(`document.documentElement.classList.contains('sidebar-open')`)) === !open, 'sidebar not toggled')
+    await hoverFooter()
+    await app.click('#toggle-sidebar')
+  })
+
+  console.log('L. 偏好设置')
+  await test('L1', '打开与关闭', async () => {
+    await app.menu('preferences')
+    expect(await visible('#preferences'), 'not opened')
+    await app.click('.prefs-close')
+    expect(!(await visible('#preferences')), 'not closed by ✕')
+    await app.menu('preferences')
+    await app.key('Escape')
+    expect(!(await visible('#preferences')), 'not closed by Esc')
+    await app.menu('preferences')
+    await app.clickAt(10, 400)
+    expect(!(await visible('#preferences')), 'not closed by outside click')
+  })
+  await test('L2', '字号与正文宽度', async () => {
+    await app.menu('preferences')
+    await app.page(`const s = document.querySelector('[data-pref="fontSize"]'); s.value = '18'; s.dispatchEvent(new Event('change')); const w = document.querySelector('[data-pref="lineWidth"]'); w.value = 'wide'; w.dispatchEvent(new Event('change')); return 1`)
+    const font = await q(`getComputedStyle(document.querySelector('#write')).fontSize`)
+    const width = await q(`getComputedStyle(document.querySelector('#write')).maxWidth`)
+    await app.page(`const s = document.querySelector('[data-pref="fontSize"]'); s.value = '16'; s.dispatchEvent(new Event('change')); const w = document.querySelector('[data-pref="lineWidth"]'); w.value = 'default'; w.dispatchEvent(new Event('change')); return 1`)
+    await app.key('Escape')
+    expect(font === '18px' && width === '1280px', `font ${font} width ${width}`)
+  })
+  await test('L3', '关闭自动配对', async () => {
+    await app.menu('preferences')
+    await app.click('[data-pref="autoPair"]')
+    await app.key('Escape')
+    await openFresh()
+    await app.click('#write .ProseMirror')
+    await app.type('(')
+    const text = await q(`document.querySelector('#write p').textContent`)
+    await app.menu('preferences')
+    await app.click('[data-pref="autoPair"]')
+    await app.key('Escape')
+    expect(text === '(', `text ${JSON.stringify(text)}`)
+  })
+
+  console.log('M. Front Matter')
+  await test('M1', '显示 front matter', async () => {
+    await openFresh('---\ntitle: Hello\n---\n\nBody.\n')
+    expect(await visible('.md-front-matter'), 'not shown')
+    expect((await q(`document.querySelector('.md-front-matter').value`)) === 'title: Hello', 'value')
+  })
+  await test('M2', '编辑 front matter 并保存', async () => {
+    const path = await openFresh('---\ntitle: Hello\n---\n\nBody.\n')
+    await app.click('.md-front-matter')
+    await app.key('End', ['meta'])
+    await app.type('\nauthor: me')
+    const text = await save(path)
+    expect(text.startsWith('---\ntitle: Hello\nauthor: me\n---'), `saved ${JSON.stringify(text)}`)
+  })
+  await test('M3', '清空后退格删除', async () => {
+    const path = await openFresh('---\ntitle: Hello\n---\n\nBody.\n')
+    await app.click('.md-front-matter')
+    await app.key('A', ['meta'])
+    await app.key('Backspace')
+    await app.key('Backspace')
+    expect(!(await visible('.md-front-matter')), 'still shown')
+    const text = await save(path)
+    expect(text.startsWith('Body.'), `saved ${JSON.stringify(text)}`)
+  })
+  await test('M4', '插入 front matter', async () => {
+    await openFresh('Body.\n')
+    await app.clickText('Body', 2)
+    await app.menu('front-matter')
+    expect(await visible('.md-front-matter'), 'not shown')
+    expect((await active()).startsWith('TEXTAREA'), `focus ${await active()}`)
+  })
+
+  console.log('N. 右键菜单与保存一致性')
+  await test('N1', '右键段落菜单', async () => {
+    await openFresh('Make me a heading.\n')
+    await app.clickText('Make', 2)
+    const r = await app.rect('#write p')
+    await app.clickAt(r.left + 20, r.y, { button: 'right' })
+    const items = await app.lastPopupLabels()
+    const top = items.map((item) => (typeof item === 'string' ? item : Object.keys(item)[0]))
+    for (const label of ['剪切', '拷贝', '粘贴', '段落', '格式', '插入']) expect(top.includes(label), `missing ${label}: ${top}`)
+    expect(!top.includes('表格'), 'table submenu outside table')
+  })
+  await test('N2', '右键 › 段落 › 1 级标题', async () => {
+    await app.clickPopupItem(['段落', '1 级标题'])
+    expect((await html('#write h1'))[0] === 'Make me a heading.', 'not heading')
+  })
+  const cases = JSON.parse(await readFile(join(ROOT, 'src/renderer/src/roundtrip-cases.json'), 'utf8'))
+  for (const [name, markdown] of Object.entries(cases.cases)) {
+    await test('N3', `往返保存 ${name}`, async () => {
+      const path = await openFresh(markdown + '\n')
+      await sleep(150)
+      const text = (await save(path)).trim()
+      expect(text === markdown || text === cases.normalizations[name], `saved ${JSON.stringify(text)}`)
+    })
+  }
+} finally {
+  const errors = app.logs
+    .join('')
+    .split('\n')
+    .filter((line) => /CONSOLE\(\d+\)|Uncaught|\[error\]/i.test(line) && /error|uncaught/i.test(line) && !/Autofill|DevTools|btm_database/i.test(line))
+  await app.close()
+  const failed = results.filter((r) => !r.ok)
+  console.log(`\n${results.length - failed.length}/${results.length} passed`)
+  if (errors.length) console.log(`renderer errors:\n${errors.slice(0, 10).join('\n')}`)
+  if (failed.length) {
+    console.log('failed:')
+    for (const f of failed) console.log(`  ${f.id} ${f.name}: ${f.error}`)
+    process.exitCode = 1
+  }
+  console.log(`docs: ${docs}`)
+}
+
+void basename

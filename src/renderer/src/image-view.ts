@@ -55,13 +55,21 @@ class ImageView implements NodeView {
     this.source.value = imageSource(this.node)
     this.autosize()
     // A freshly inserted empty image goes straight to editing its path.
-    if (!this.node.attrs.src) {
-      requestAnimationFrame(() => {
-        this.source.focus()
-        const caret = this.source.value.indexOf('](') + 2
-        this.source.setSelectionRange(caret, caret)
-      })
-    }
+    if (!this.node.attrs.src) this.focusSource(3)
+  }
+
+  /**
+   * ProseMirror may pull focus back into the editor while it syncs the node selection,
+   * so make sure the caret really lands in the path box.
+   */
+  private focusSource(attempts: number): void {
+    setTimeout(() => {
+      if (this.source.hidden || document.activeElement === this.source) return
+      this.source.focus()
+      const caret = this.source.value.indexOf('](') + 2
+      this.source.setSelectionRange(caret, caret)
+      if (attempts > 1) this.focusSource(attempts - 1)
+    }, 30)
   }
 
   deselectNode(): void {

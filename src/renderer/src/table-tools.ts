@@ -162,6 +162,16 @@ export function runTableCommand(command: TableCommand, view: EditorView, call: C
   }
 }
 
+/** After inserting a table, Typora puts the caret in its first header cell. */
+export function focusTableNear(view: EditorView, pos: number): void {
+  let best = -1
+  view.state.doc.descendants((node, nodePos) => {
+    if (node.type.name === 'table' && (best === -1 || Math.abs(nodePos - pos) < Math.abs(best - pos))) best = nodePos
+    return node.type.name !== 'table'
+  })
+  if (best >= 0) focusCell(view, best, 0, 0)
+}
+
 export function resizeCurrentTable(view: EditorView, rows: number, cols: number): void {
   const info = tableInfo(view.state)
   if (!info) return
@@ -244,6 +254,9 @@ class TableToolbar implements PluginView {
   private sizeLabel: HTMLElement
   private panel: HTMLElement
   private info: TableInfo | null = null
+  /** Caret position when the open panel was shown; moving the caret closes the panel. */
+  private panelAnchor = -1
+  private blurTimer = 0
 
   constructor(
     private view: EditorView,
@@ -272,17 +285,37 @@ class TableToolbar implements PluginView {
       if (!(event.target as HTMLElement).closest('input')) event.preventDefault()
     })
     this.el.addEventListener('click', (event) => this.onClick(event))
+    document.addEventListener('mousedown', this.onDocumentMouseDown, true)
+  }
+
+  isPanelOpen(): boolean {
+    return !this.panel.hidden
+  }
+
+  closePanel(refocus = false): void {
+    this.panel.hidden = true
+    this.panelAnchor = -1
+    if (refocus) this.view.focus()
   }
 
   update(view: EditorView): void {
     this.view = view
     const info = tableInfo(view.state)
-    const active = info && (view.hasFocus() || this.el.contains(document.activeElement))
-    if (!active) {
+    if (!info) {
       this.hide()
       return
     }
-    if (this.info?.tablePos !== info.tablePos) this.panel.hidden = true
+    if (!view.hasFocus() && !this.el.contains(document.activeElement)) {
+      // During a focus change (e.g. clicking the size inputs) activeElement is briefly <body>;
+      // decide once focus has landed instead of hiding the panel the user is clicking into.
+      window.clearTimeout(this.blurTimer)
+      this.blurTimer = window.setTimeout(() => {
+        if (!this.view.hasFocus() && !this.el.contains(document.activeElement)) this.hide()
+      }, 0)
+      return
+    }
+    if (this.info?.tablePos !== info.tablePos) this.closePanel()
+    if (!this.panel.hidden && view.state.selection.from !== this.panelAnchor) this.closePanel()
     this.info = info
     this.el.hidden = false
     this.sizeLabel.textContent = `${info.map.height} × ${info.map.width}`
@@ -294,12 +327,19 @@ class TableToolbar implements PluginView {
   }
 
   destroy(): void {
+    window.clearTimeout(this.blurTimer)
+    document.removeEventListener('mousedown', this.onDocumentMouseDown, true)
     this.el.remove()
+  }
+
+  /** Any press outside the toolbar closes an open panel (like a native popup menu). */
+  private onDocumentMouseDown = (event: MouseEvent): void => {
+    if (!this.panel.hidden && !this.el.contains(event.target as Node)) this.closePanel()
   }
 
   private hide(): void {
     this.el.hidden = true
-    this.panel.hidden = true
+    this.closePanel()
     this.info = null
   }
 
@@ -320,7 +360,7 @@ class TableToolbar implements PluginView {
     const button = target.closest<HTMLElement>('button')
     if (!button) return
     if (button.dataset.cmd) {
-      this.panel.hidden = true
+      this.closePanel()
       this.run(button.dataset.cmd as TableCommand)
     } else if (button.dataset.action === 'more') {
       this.togglePanel('more')
@@ -329,16 +369,18 @@ class TableToolbar implements PluginView {
     } else if (button.dataset.action === 'apply-size') {
       const rows = Number(this.panel.querySelector<HTMLInputElement>('[name="rows"]')!.value)
       const cols = Number(this.panel.querySelector<HTMLInputElement>('[name="cols"]')!.value)
-      this.panel.hidden = true
+      this.closePanel()
       if (rows > 0 && cols > 0) resizeCurrentTable(this.view, rows, cols)
+      else this.view.focus()
     }
   }
 
   private togglePanel(kind: 'more' | 'resize'): void {
     if (!this.panel.hidden && this.panel.dataset.kind === kind) {
-      this.panel.hidden = true
+      this.closePanel()
       return
     }
+    this.panelAnchor = this.view.state.selection.from
     this.panel.dataset.kind = kind
     if (kind === 'more') {
       this.panel.innerHTML = MORE_ITEMS.map((item) =>
@@ -353,10 +395,7 @@ class TableToolbar implements PluginView {
       this.panel.querySelectorAll('input').forEach((input) =>
         input.addEventListener('keydown', (event) => {
           if (event.key === 'Enter') this.panel.querySelector<HTMLElement>('[data-action="apply-size"]')!.click()
-          if (event.key === 'Escape') {
-            this.panel.hidden = true
-            this.view.focus()
-          }
+          if (event.key === 'Escape') this.closePanel(true)
         })
       )
     }
@@ -365,12 +404,19 @@ class TableToolbar implements PluginView {
 }
 
 export function createTableToolbar(run: (command: TableCommand) => void) {
+  let toolbar: TableToolbar | null = null
   return $prose(
     () =>
       new Plugin({
         key: new PluginKey('mtypora-table-toolbar'),
-        view: (view) => new TableToolbar(view, run),
+        view: (view) => (toolbar = new TableToolbar(view, run)),
         props: {
+          // Esc in the editor closes an open table panel first.
+          handleKeyDown: (_view, event) => {
+            if (event.key !== 'Escape' || !toolbar?.isPanelOpen()) return false
+            toolbar.closePanel()
+            return true
+          },
           handleDOMEvents: {
             // Re-evaluate visibility when focus leaves the editor.
             blur: (view) => {
