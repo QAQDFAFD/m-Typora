@@ -53,6 +53,7 @@ function formatItems(send: Send): MenuItemConstructorOptions[] {
     c('斜体', 'emphasis', 'CmdOrCtrl+I'),
     c('代码', 'inline-code', 'Ctrl+`'),
     c('删除线', 'strike', 'Ctrl+Shift+`'),
+    c('下划线', 'underline', 'CmdOrCtrl+U'),
     { type: 'separator' },
     c('超链接', 'link', 'CmdOrCtrl+K'),
     c('图像', 'image', ctrlCmd('I')),

@@ -1,0 +1,54 @@
+/* Gothic — a geometric sans-serif theme with bold display headings and no rules. */
+
+:root[data-theme='gothic'] {
+  --line-height: 1.7;
+  --text-color: #353535;
+  --heading-color: #222222;
+  --link-color: #4a84d6;
+  --md-meta-color: #b8b8b8;
+  --quote-border-color: #e3e3e3;
+  --quote-color: #8a8a8a;
+  --hr-color: #ececec;
+}
+
+:root[data-theme='gothic'] #write {
+  font-family: TeXGyreAdventor, 'Century Gothic', 'Avenir Next', Avenir, Futura, 'PingFang SC', 'Hiragino Sans GB', sans-serif;
+  letter-spacing: 0.01em;
+}
+
+:root[data-theme='gothic'] #write h1,
+:root[data-theme='gothic'] #write h2,
+:root[data-theme='gothic'] #write h3,
+:root[data-theme='gothic'] #write h4,
+:root[data-theme='gothic'] #write h5,
+:root[data-theme='gothic'] #write h6 {
+  border-bottom: 0;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+:root[data-theme='gothic'] #write h1 {
+  font-size: 2.5em;
+  margin-top: 1.2em;
+}
+
+:root[data-theme='gothic'] #write h2 {
+  font-size: 1.85em;
+  margin-top: 1.4em;
+}
+
+:root[data-theme='gothic'] #write h3 {
+  font-size: 1.45em;
+}
+
+:root[data-theme='gothic'] #write a {
+  text-decoration: none;
+}
+
+:root[data-theme='gothic'] #write a:hover {
+  text-decoration: underline;
+}
+
+:root[data-theme='gothic'] #write blockquote {
+  border-left-width: 3px;
+}

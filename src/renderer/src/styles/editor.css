@@ -62,6 +62,48 @@
   line-height: 1.45;
 }
 
+/* -------------------------------------------------------------- images */
+
+#write .md-image {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: bottom;
+}
+
+#write .md-image img {
+  display: block;
+  max-width: 100%;
+}
+
+#write .md-image.selected img {
+  outline: 2px solid var(--select-text-bg-color);
+}
+
+#write .md-image-placeholder {
+  display: inline-block;
+  padding: 2px 10px;
+  border: 1px dashed var(--meta-text-color);
+  border-radius: 3px;
+  color: var(--meta-text-color);
+  font-size: 0.85em;
+}
+
+/* Typora shows the image's Markdown source above it while it is selected. */
+#write .md-image-source {
+  display: block;
+  min-width: 8ch;
+  max-width: 100%;
+  margin-bottom: 4px;
+  padding: 1px 4px;
+  border: 1px solid var(--code-border-color);
+  border-radius: 3px;
+  background: var(--code-bg-color);
+  color: var(--text-color);
+  font: 0.9em var(--monospace);
+  outline: none;
+}
+
 /* --------------------------------------------------------------- lists */
 
 /* Block layout (not Crepe's flex) so paragraph margins collapse across items
@@ -270,22 +312,134 @@
   opacity: 0.85;
 }
 
-/* ---------------------------------------------------------------- math */
+/* ------------------------------------------------- math blocks, diagrams */
 
-#write .milkdown-code-block:has(.preview-panel) {
+/* Like Typora, math blocks and diagrams show only their rendering until clicked. */
+#write .milkdown-code-block:has(.preview-panel):not(:focus-within) {
   background: transparent;
   border-color: transparent;
 }
 
-#write .milkdown-code-block:has(.preview-panel):focus-within {
-  border-color: var(--code-border-color);
-  background: var(--code-bg-color);
+#write .milkdown-code-block:has(.preview-panel):not(:focus-within) > .codemirror-host,
+#write .milkdown-code-block:has(.preview-panel):not(:focus-within) > .tools {
+  display: none;
 }
 
 #write .milkdown-code-block .preview {
   text-align: center;
   padding: 6px 0;
+  overflow-x: auto;
 }
+
+#write .md-diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+
+#write .md-diagram-error {
+  color: #d1443a;
+  font: 0.85em var(--ui-font);
+}
+
+/* ------------------------------------------ extended syntax (decorations) */
+
+.md-hidden-syntax {
+  display: none !important;
+}
+
+.md-meta-inline,
+#write [data-type='html'],
+#write .md-html-tag {
+  color: var(--md-meta-color);
+}
+
+#write [data-type='html'] {
+  font-family: var(--monospace);
+  font-size: 0.9em;
+}
+
+#write mark.md-highlight {
+  background: var(--highlight-bg);
+  color: inherit;
+  padding: 0;
+}
+
+#write .md-emoji {
+  font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif;
+}
+
+#write .md-emoji-source {
+  color: var(--md-meta-color);
+}
+
+#write .md-html-block {
+  display: block;
+}
+
+#write .md-html-block img,
+#write .md-html-inline img {
+  max-width: 100%;
+}
+
+/* GitHub-style alerts (> [!NOTE] …) */
+#write blockquote.md-alert {
+  color: var(--text-color);
+  border-left-color: var(--alert-color);
+}
+
+#write blockquote.md-alert::before {
+  content: attr(data-alert-title);
+  display: block;
+  margin: 0.4em 0 0.2em;
+  color: var(--alert-color);
+  font-weight: 600;
+}
+
+#write .md-alert-note {
+  --alert-color: #0969da;
+}
+
+#write .md-alert-tip {
+  --alert-color: #1a7f37;
+}
+
+#write .md-alert-important {
+  --alert-color: #8250df;
+}
+
+#write .md-alert-warning {
+  --alert-color: #9a6700;
+}
+
+#write .md-alert-caution {
+  --alert-color: #cf222e;
+}
+
+#write .md-alert-marker-line {
+  display: none;
+}
+
+/* [toc] */
+#write .md-toc {
+  display: block;
+  margin: 0.2em 0;
+  padding: 0.4em 0;
+  font-size: 0.95em;
+  user-select: none;
+}
+
+#write .md-toc-item {
+  padding-top: 2px;
+  padding-bottom: 2px;
+  color: var(--link-color);
+  cursor: pointer;
+}
+
+#write .md-toc-item:hover {
+  text-decoration: underline;
+}
+
+/* ---------------------------------------------------------------- math */
 
 /* ---------------------------------------------------------- focus mode */
 

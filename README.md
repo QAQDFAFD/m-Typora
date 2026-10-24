@@ -11,6 +11,9 @@
 - 源代码模式（`⌘/`），与所见即所得视图双向同步
 - YAML Front Matter 显示为文档顶部的灰色等宽块
 - 代码块使用经典 CodeMirror 配色，语言选择器只在编辑时出现；KaTeX 公式；GFM 表格与任务列表
+- Typora 扩展语法：`==高亮==`、`H~2~O` 下标、`X^2^` 上标、`:smile:` 表情、`<u>下划线</u>`（`⌘U`）与常用行内 HTML、HTML 块、`> [!NOTE]` 等 Callout、`[toc]` 目录、mermaid 图表；光标进入时显示源码
+- 保存不改内容：图片 alt/title、下标、Callout、`[toc]`、`array[0]` 这类方括号都原样写回（`npm run dev:web` 后在开发者工具执行 `await mtyporaRoundTrip()` 可跑回归用例）
+- 点击图片显示可编辑的 `![alt](src "title")` 源码
 - 括号与引号自动配对；`⌘`+点击打开链接
 - 查找与替换（`⌘F` / `⌥⌘F`，支持区分大小写和全词匹配）
 - 粘贴/拖入的图片自动复制到文档旁的 `assets/` 目录
@@ -20,7 +23,7 @@
 - 侧边栏（`⇧⌘L`，可拖动调整宽度）：文档列表、文件树、可折叠大纲、文件夹全文搜索
 - 状态栏在移动鼠标时浮现、打字时隐藏：侧边栏开关、源码模式开关、字数统计（点击查看词数 / 字符 / 行数 / 阅读时间）
 - 快速打开（`⇧⌘O`）：模糊搜索最近文件和当前文件夹
-- 五套主题：Github、Newsprint、Night、Pixyll、Whitey
+- 六套主题：Github、Gothic、Newsprint、Night、Pixyll、Whitey（只有 Github 按原版实测还原，其余为近似实现）
 - 专注模式（`F8`）、打字机模式（`F9`）、缩放
 
 **菜单与文件**
@@ -74,6 +77,11 @@ src/
         ├── app.ts            应用状态与命令分发
         ├── wysiwyg.ts        Milkdown Crepe 封装与段落/格式命令
         ├── syntax-reveal.ts  光标处显示 Markdown 标记
+        ├── extended-syntax.ts 高亮、上下标、表情、HTML、Callout、目录的渲染
+        ├── markdown-config.ts 序列化规则（不多加转义、单 ~ 为下标）
+        ├── image-view.ts     图片显示与源码编辑
+        ├── diagrams.ts       mermaid 图表（按需加载）
+        ├── roundtrip.ts      保存不改内容的回归用例（开发模式）
         ├── search-plugin.ts  查找替换（ProseMirror 装饰）
         ├── auto-pair.ts      括号/引号自动配对
         ├── focus-plugin.ts   专注 / 打字机模式
@@ -89,4 +97,6 @@ samples/             对照用的示例文档
 
 - 行内标记（`**` 等）以只读方式显示，修改格式请用快捷键或删除后重输；Typora 中这些标记可以直接编辑。
 - 表格使用 Milkdown 的行列手柄，而不是 Typora 的表格工具栏。
-- 尚未实现：mermaid 图表、目录 `[TOC]`、脚注插入、Pandoc 多格式导出、图片上传服务、版本历史。
+- 保存时会做少量不改变含义的规范化：表格分隔行写成 `| - |`、引用式链接改为行内链接、`===` 标题改为 `#`、行尾两个空格的换行改为 `\`。
+- 被空行拆开的 HTML 块（如 `<details>` 中间夹着 Markdown）按源码显示，不渲染。
+- 尚未实现：脚注插入命令、Pandoc 多格式导出、导出图片、图片上传服务、版本历史、自定义主题目录。

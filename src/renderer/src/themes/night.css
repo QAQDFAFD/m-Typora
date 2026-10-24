@@ -44,6 +44,7 @@
   --task-box-border: #6f777e;
   --task-box-bg: #2e3033;
   --task-box-checked: #4a89dc;
+  --highlight-bg: rgba(255, 213, 0, 0.35);
 
   --cm-keyword: #c991e1;
   --cm-atom: #f99157;
