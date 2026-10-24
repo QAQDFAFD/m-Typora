@@ -1,9 +1,10 @@
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import { NodeSelection, Plugin, PluginKey, TextSelection } from '@milkdown/kit/prose/state'
-import type { EditorView, NodeView } from '@milkdown/kit/prose/view'
+import { Decoration, DecorationSet, type EditorView, type NodeView } from '@milkdown/kit/prose/view'
 import { $prose } from '@milkdown/kit/utils'
 
 const IMAGE_SOURCE = /^!\[([^\]]*)\]\(\s*<?([^\s>)]*)>?(?:\s+"([^"]*)")?\s*\)$/
+const MIN_WIDTH = 24
 
 function imageSource(node: ProseNode): string {
   const { alt, src, title } = node.attrs
@@ -12,11 +13,14 @@ function imageSource(node: ProseNode): string {
 
 /**
  * Inline image rendered like Typora: the picture itself, and its Markdown source
- * (`![alt](src "title")`) in an editable box while the image is selected.
+ * (`![alt](src "title")`) in an editable box while the image is selected. A handle on the
+ * picture's corner resizes it.
  */
 class ImageView implements NodeView {
   dom: HTMLElement
   private img: HTMLImageElement
+  private frame: HTMLElement
+  private handle: HTMLElement
   private placeholder: HTMLElement
   private source: HTMLTextAreaElement
   /** Draggable ancestors switched off while the path is edited (they swallow text selection). */
@@ -32,6 +36,17 @@ class ImageView implements NodeView {
     this.dom.className = 'md-image'
     this.img = document.createElement('img')
     this.img.draggable = false
+    this.handle = document.createElement('span')
+    this.handle.className = 'md-image-resize'
+    this.handle.title = '拖动调整大小，双击恢复原始大小'
+    this.handle.addEventListener('mousedown', (event) => this.startResize(event))
+    this.handle.addEventListener('dblclick', (event) => {
+      event.preventDefault()
+      this.setSize('')
+    })
+    this.frame = document.createElement('span')
+    this.frame.className = 'md-image-frame'
+    this.frame.append(this.img, this.handle)
     // A broken or unreachable image still needs something to click (to fix its path).
     this.img.addEventListener('error', () => this.showPlaceholder(true))
     this.img.addEventListener('load', () => this.showPlaceholder(false))
@@ -43,7 +58,7 @@ class ImageView implements NodeView {
     this.source.spellcheck = false
     this.source.rows = 1
     this.source.hidden = true
-    this.dom.append(this.source, this.img, this.placeholder)
+    this.dom.append(this.source, this.frame, this.placeholder)
     this.source.addEventListener('keydown', (event) => this.onSourceKey(event))
     this.source.addEventListener('mousedown', () => {
       this.allowTextSelection()
@@ -117,7 +132,7 @@ class ImageView implements NodeView {
   }
 
   stopEvent(event: Event): boolean {
-    return event.target === this.source
+    return event.target === this.source || event.target === this.handle
   }
 
   ignoreMutation(): boolean {
@@ -125,23 +140,75 @@ class ImageView implements NodeView {
   }
 
   private showPlaceholder(broken: boolean): void {
-    this.img.hidden = broken
+    this.frame.hidden = broken
     this.placeholder.hidden = !broken
     this.placeholder.classList.toggle('broken', broken && Boolean(this.node.attrs.src))
     this.placeholder.title = broken && this.node.attrs.src ? `无法加载图片：${this.node.attrs.src}` : ''
   }
 
   private render(): void {
-    const { src, alt, title } = this.node.attrs
+    const { src, alt, title, width, zoom } = this.node.attrs
     this.placeholder.textContent = alt || '图片'
     if (!src) this.showPlaceholder(true)
     else if (this.img.getAttribute('src') !== this.resolve(src)) {
-      this.img.hidden = false
+      this.frame.hidden = false
       this.placeholder.hidden = true
     }
     if (src) this.img.src = this.resolve(src)
     this.img.alt = alt ?? ''
     this.img.title = title ?? ''
+    this.img.style.width = width ? (width.endsWith('%') ? width : `${width}px`) : ''
+    this.img.style.zoom = zoom ?? ''
+  }
+
+  /**
+   * Dragging the corner handle sets the image's width (the height follows). A centered
+   * image grows on both sides, so it changes by twice the distance to stay under the pointer;
+   * a right-aligned one has its handle on the left.
+   */
+  private startResize(event: MouseEvent): void {
+    if (event.button !== 0) return
+    event.preventDefault()
+    event.stopPropagation()
+    const rect = this.img.getBoundingClientRect()
+    // Page zoom: pointer distances are in screen pixels, widths in CSS pixels.
+    const scale = rect.width / (this.img.offsetWidth || rect.width || 1)
+    const start = { x: event.clientX, width: this.img.offsetWidth }
+    const block = this.dom.parentElement
+    const align = block ? getComputedStyle(block).textAlign : 'left'
+    const factor = align === 'center' ? 2 : align === 'right' || align === 'end' ? -1 : 1
+    const max = Math.max(MIN_WIDTH, block?.clientWidth ?? Infinity)
+    let width = start.width
+    this.dom.classList.add('resizing')
+    const onMove = (move: MouseEvent) => {
+      width = Math.round(Math.min(max, Math.max(MIN_WIDTH, start.width + ((move.clientX - start.x) * factor) / scale)))
+      this.img.style.width = `${width}px`
+      this.img.style.zoom = ''
+      this.handle.dataset.size = `${width} × ${Math.round(this.img.offsetHeight)}`
+    }
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      this.dom.classList.remove('resizing')
+      delete this.handle.dataset.size
+      if (width !== start.width) this.setSize(String(width))
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  /** Stores a width in pixels ('' for the image's own size); one undoable step. */
+  private setSize(width: string): void {
+    const pos = this.getPos()
+    if (pos === undefined) return
+    if (width === this.node.attrs.width && !this.node.attrs.zoom) {
+      this.render()
+      return
+    }
+    const tr = this.view.state.tr.setNodeMarkup(pos, undefined, { ...this.node.attrs, width, zoom: '' })
+    this.view.dispatch(tr.setSelection(NodeSelection.create(tr.doc, pos)))
+    // The handle took the press without focusing the editor; ⌘Z should undo the resize.
+    this.view.focus()
   }
 
   private onSourceKey(event: KeyboardEvent): void {
@@ -177,12 +244,39 @@ class ImageView implements NodeView {
   }
 }
 
+/** A paragraph holding nothing but images (and line breaks): it follows the image alignment. */
+function isImageParagraph(node: ProseNode): boolean {
+  let images = 0
+  let other = false
+  node.forEach((child) => {
+    if (child.type.name === 'image') images++
+    else if (child.type.name !== 'hardbreak' && !(child.isText && !child.text!.trim())) other = true
+  })
+  return images > 0 && !other
+}
+
+function imageParagraphs(doc: ProseNode): DecorationSet {
+  const decorations: Decoration[] = []
+  doc.descendants((node, pos) => {
+    if (node.type.name !== 'paragraph') return true
+    if (isImageParagraph(node)) decorations.push(Decoration.node(pos, pos + node.nodeSize, { class: 'md-image-paragraph' }))
+    return false
+  })
+  return DecorationSet.create(doc, decorations)
+}
+
 export function createImagePlugin(resolve: (src: string) => string) {
+  const key = new PluginKey<DecorationSet>('mtypora-image')
   return $prose(
     () =>
-      new Plugin({
-        key: new PluginKey('mtypora-image'),
+      new Plugin<DecorationSet>({
+        key,
+        state: {
+          init: (_config, state) => imageParagraphs(state.doc),
+          apply: (tr, set) => (tr.docChanged ? imageParagraphs(tr.doc) : set)
+        },
         props: {
+          decorations: (state) => key.getState(state),
           nodeViews: {
             image: (node, view, getPos) => new ImageView(node, view, getPos, resolve)
           }

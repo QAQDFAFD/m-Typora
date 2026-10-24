@@ -29,13 +29,14 @@ import type { CodeBlockSource } from './export'
 import { createExtendedSyntaxPlugin } from './extended-syntax'
 import { createFocusPlugin } from './focus-plugin'
 import { headingKeymap } from './heading-keymap'
+import { remarkSizedImages, sizedImageSchema } from './image-schema'
 import { createImagePlugin } from './image-view'
 import { linkEditorPlugin, openLinkEditor } from './link-editor'
 import { linkInputPlugin } from './link-input'
 import { mathInlineEditPlugin } from './math-inline'
 import { configureMarkdown } from './markdown-config'
 import { searchPlugin } from './search-plugin'
-import { syntaxRevealPlugin } from './syntax-reveal'
+import { syntaxRevealKeymap, syntaxRevealPlugin } from './syntax-reveal'
 import { createTableToolbar, focusTableNear, runTableCommand, tableInfo, tableKeymap, type TableCommand } from './table-tools'
 
 export interface WysiwygOptions {
@@ -106,6 +107,8 @@ export class WysiwygEditor {
     })
     this.crepe.editor
       .use(upload)
+      .use(remarkSizedImages)
+      .use(sizedImageSchema)
       .use(createImagePlugin(options.resolveImage))
       .use(createExtendedSyntaxPlugin(options.resolveImage))
       .use(linkEditorPlugin)
@@ -113,6 +116,7 @@ export class WysiwygEditor {
       .use(headingKeymap)
       .use(createTableToolbar((command) => this.exec(command)))
       .use(syntaxRevealPlugin)
+      .use(syntaxRevealKeymap)
       .use(searchPlugin)
       .use(linkInputPlugin)
       .use(codeLanguagePlugin)

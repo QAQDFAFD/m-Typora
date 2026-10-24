@@ -1,16 +1,26 @@
 import { THEMES, type ThemeId } from '../../shared/api'
 import { escapeHtml } from './markdown-utils'
-import type { Prefs } from './prefs'
+import { DEFAULT_PICGO_PORT, validPort, type Prefs } from './prefs'
 
 type Section = 'general' | 'editor' | 'image' | 'export' | 'appearance'
 
-const SECTIONS: Array<[Section, string]> = [
-  ['general', '通用'],
-  ['editor', '编辑器'],
-  ['image', '图像'],
-  ['export', '导出'],
-  ['appearance', '外观']
+/** 16px line icons drawn in the text color, so they follow the theme like the labels. */
+const icon = (paths: string) =>
+  `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`
+
+const SECTIONS: Array<[Section, string, string]> = [
+  ['general', '通用', icon('<path d="M2 4.5h6M11 4.5h3M2 11.5h3M8 11.5h6"/><circle cx="9.5" cy="4.5" r="1.5"/><circle cx="6.5" cy="11.5" r="1.5"/>')],
+  ['editor', '编辑器', icon('<path d="M10.5 2.5l3 3L6 13H3v-3zM9 4l3 3"/>')],
+  ['image', '图像', icon('<rect x="2" y="3" width="12" height="10" rx="1.5"/><circle cx="6" cy="6.5" r="1.2"/><path d="M2.5 12l3.5-3.5 2.5 2.5 2-2 3 3"/>')],
+  ['export', '导出', icon('<path d="M8 2.5v7.5M5 5.5l3-3 3 3M3 9v4h10V9"/>')],
+  ['appearance', '外观', icon('<circle cx="8" cy="8" r="5.5"/><path d="M8 2.5a5.5 5.5 0 0 1 0 11z" fill="currentColor"/>')]
 ]
+
+/** Preferences stored as numbers, and how a typed value is checked (null rejects it). */
+const NUMBER_PREFS: Partial<Record<keyof Prefs, (value: string) => number | null>> = {
+  fontSize: (value) => Number(value),
+  picgoPort: validPort
+}
 
 export interface PreferencesHandlers {
   onChange(patch: Partial<Prefs>): void
@@ -32,6 +42,8 @@ const check = (key: keyof Prefs, label: string, prefs: Prefs) =>
 export class PreferencesDialog {
   private section: Section = 'general'
   private offset = { x: 0, y: 0 }
+  /** The preferences the controls show. */
+  private prefs: Prefs | null = null
 
   constructor(
     private el: HTMLElement,
@@ -40,8 +52,9 @@ export class PreferencesDialog {
     el.addEventListener('mousedown', (event) => {
       if (event.target === el) this.close()
     })
-    el.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape') this.close()
+    // On the document: focus can fall out of the dialog (a disabled button loses it).
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && this.isOpen() && !event.defaultPrevented) this.close()
     })
   }
 
@@ -50,11 +63,12 @@ export class PreferencesDialog {
   }
 
   open(prefs: Prefs): void {
+    this.prefs = prefs
     this.el.innerHTML = `
       <div class="prefs-panel" role="dialog" aria-label="偏好设置" tabindex="-1">
         <div class="prefs-header" title="拖动以移动">偏好设置<button class="prefs-close" title="关闭">✕</button></div>
         <div class="prefs-body">
-          <nav class="prefs-nav">${SECTIONS.map(([id, label]) => `<button class="prefs-nav-item" data-section="${id}">${label}</button>`).join('')}</nav>
+          <nav class="prefs-nav">${SECTIONS.map(([id, label, svg]) => `<button class="prefs-nav-item" data-section="${id}">${svg}<span>${label}</span></button>`).join('')}</nav>
           <div class="prefs-content">${SECTIONS.map(([id]) => `<section class="prefs-section" data-section="${id}">${this.renderSection(id, prefs)}</section>`).join('')}</div>
         </div>
       </div>`
@@ -73,6 +87,7 @@ export class PreferencesDialog {
   /** Reflects changes made elsewhere (menus, shortcuts) while the dialog is open. */
   sync(prefs: Prefs): void {
     if (!this.isOpen()) return
+    this.prefs = prefs
     this.el.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-pref]').forEach((control) => {
       const value = prefs[control.dataset.pref as keyof Prefs]
       if (control instanceof HTMLInputElement && control.type === 'checkbox') control.checked = Boolean(value)
@@ -98,6 +113,11 @@ export class PreferencesDialog {
           </label>`
       case 'image':
         return `
+          <h3>显示</h3>
+          <label class="prefs-row">图片对齐
+            <select data-pref="imageAlign">${option('left', '居左', prefs.imageAlign)}${option('center', '居中', prefs.imageAlign)}${option('right', '居右', prefs.imageAlign)}</select>
+          </label>
+          <p class="prefs-hint">单独占一段的图片按此对齐，导出的 HTML / PDF 相同。选中图片后拖动右下角的手柄可以调整大小，双击手柄恢复原始大小。</p>
           <h3>插入图片时</h3>
           <label class="prefs-row">对本地图片
             <select data-pref="imageInsert">
@@ -116,7 +136,10 @@ export class PreferencesDialog {
             </select>
           </label>
           <div class="prefs-service" data-service="picgo-app">
-            <p class="prefs-hint">需要先运行 PicGo，并在 PicGo 的「设置 › 设置 Server」中开启 Server（默认端口 36677）。</p>
+            <label class="prefs-row">端口
+              <input type="number" data-pref="picgoPort" value="${prefs.picgoPort}" min="1" max="65535" placeholder="${DEFAULT_PICGO_PORT}" />
+            </label>
+            <p class="prefs-hint">需要先运行 PicGo，并在 PicGo 的「设置 › 设置 Server」中开启 Server；端口与 PicGo 中的一致，默认 ${DEFAULT_PICGO_PORT}。</p>
           </div>
           <div class="prefs-service" data-service="picgo-core">
             <label class="prefs-row">PicGo-Core 路径
@@ -198,12 +221,15 @@ export class PreferencesDialog {
     panel.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-pref]').forEach((control) => {
       control.addEventListener('change', () => {
         const key = control.dataset.pref as keyof Prefs
-        const value =
-          control instanceof HTMLInputElement && control.type === 'checkbox'
-            ? control.checked
-            : key === 'fontSize'
-              ? Number(control.value)
-              : control.value
+        const parse = NUMBER_PREFS[key]
+        const value = control instanceof HTMLInputElement && control.type === 'checkbox' ? control.checked : parse ? parse(control.value) : control.value
+        if (value === null) {
+          // Not a valid number: an emptied port goes back to the default, anything else is undone.
+          const fallback = key === 'picgoPort' && !control.value.trim() ? DEFAULT_PICGO_PORT : this.prefs?.[key]
+          control.value = String(fallback)
+          if (fallback !== this.prefs?.[key]) this.handlers.onChange({ [key]: fallback } as Partial<Prefs>)
+          return
+        }
         this.handlers.onChange({ [key]: value } as Partial<Prefs>)
         if (key === 'uploadService') this.showService()
       })
@@ -217,7 +243,7 @@ export class PreferencesDialog {
     const status = panel.querySelector<HTMLElement>('[data-status="upload"]')!
     const button = panel.querySelector<HTMLButtonElement>('[data-action="test-upload"]')!
     // Text fields only commit on change; make sure what is typed is what gets tested.
-    panel.querySelectorAll<HTMLInputElement>('input[type="text"][data-pref]').forEach((input) => input.dispatchEvent(new Event('change')))
+    panel.querySelectorAll<HTMLInputElement>('input:is([type="text"], [type="number"])[data-pref]').forEach((input) => input.dispatchEvent(new Event('change')))
     status.hidden = false
     status.className = 'prefs-status'
     status.textContent = '正在上传测试图片…'
@@ -231,6 +257,8 @@ export class PreferencesDialog {
       status.textContent = `上传失败：${(error as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')}`
     } finally {
       button.disabled = false
+      // Disabling the button took focus away from the dialog.
+      if (!panel.contains(document.activeElement)) button.focus()
     }
   }
 
