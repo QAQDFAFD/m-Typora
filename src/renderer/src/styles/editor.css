@@ -62,6 +62,33 @@
   line-height: 1.45;
 }
 
+/* --------------------------------------------------------- link editor */
+
+.md-link-editor {
+  position: absolute;
+  z-index: 6;
+  padding: 4px;
+  border-radius: 6px;
+  background: var(--popover-bg-color);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.16), 0 0 0 1px rgba(0, 0, 0, 0.06);
+}
+
+.md-link-editor input {
+  width: 320px;
+  max-width: 70vw;
+  padding: 4px 8px;
+  border: 1px solid var(--sidebar-border-color);
+  border-radius: 4px;
+  outline: none;
+  background: var(--bg-color);
+  color: var(--text-color);
+  font: 13px var(--ui-font);
+}
+
+.md-link-editor input:focus {
+  border-color: var(--accent-color);
+}
+
 /* -------------------------------------------------------------- images */
 
 #write .md-image {
@@ -239,6 +266,7 @@
   bottom: -26px;
   z-index: 2;
   display: flex;
+  align-items: center;
   gap: 4px;
   opacity: 0;
   pointer-events: none;
@@ -254,7 +282,12 @@
 #write .milkdown-code-block .tools .language-button,
 #write .milkdown-code-block .tools .tools-button-group button {
   opacity: 1;
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
   height: 22px;
+  margin: 0;
+  line-height: 20px;
   padding: 0 8px;
   border-radius: 3px;
   background: var(--bg-color);
@@ -282,34 +315,153 @@
 
 /* --------------------------------------------------------------- tables */
 
-#write .milkdown-table-block {
+/* prosemirror-tables wraps each table; wide tables scroll sideways like in Typora. */
+#write .tableWrapper {
   margin: 0.8em 0;
+  overflow-x: auto;
 }
 
-#write .milkdown-table-block table {
+#write table {
   width: 100%;
+  /* Typora's gap above a table (measured), which the 16px table toolbar fits into. */
+  margin: 16px 0 0.8em;
   border-collapse: collapse;
 }
 
-#write .milkdown-table-block th,
-#write .milkdown-table-block td {
-  padding: 6px 13px;
-  border: 1px solid var(--table-border-color);
-}
-
-#write .milkdown-table-block th p,
-#write .milkdown-table-block td p {
+#write .tableWrapper table {
   margin: 0;
 }
 
-/* Row / column handles only while working on the table, never at rest. */
-#write .milkdown-table-block .handle {
-  opacity: 0;
+#write th,
+#write td {
+  min-width: 32px;
+  padding: 6px 13px;
+  border: 1px solid var(--table-border-color);
+  vertical-align: top;
+  /* Long URLs or identifiers wrap instead of pushing the table off a narrow window. */
+  overflow-wrap: anywhere;
 }
 
-#write .milkdown-table-block:hover .handle,
-#write .milkdown-table-block:focus-within .handle {
-  opacity: 0.85;
+#write th p,
+#write td p {
+  margin: 0;
+}
+
+/* Column widths are not part of Markdown, so the resize grip is not offered. */
+#write .column-resize-handle {
+  display: none;
+}
+
+#write .ProseMirror.resize-cursor {
+  cursor: auto;
+}
+
+#write .selectedCell::after {
+  background: var(--select-text-bg-color);
+  opacity: 0.45;
+}
+
+/* Typora's table tooltip: floats above the header while the caret is in the table. */
+.md-table-toolbar {
+  position: absolute;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  height: 16px;
+  padding: 0 1px;
+  background: var(--bg-color);
+  font: 11px var(--ui-font);
+  color: var(--meta-text-color);
+  user-select: none;
+}
+
+.md-table-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 16px;
+  min-width: 20px;
+  padding: 0 3px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+.md-table-toolbar button:hover,
+.md-table-toolbar button.active {
+  background: var(--item-hover-bg-color);
+  color: var(--text-color);
+}
+
+.md-table-toolbar svg {
+  width: 13px;
+  height: 13px;
+}
+
+.md-table-sep {
+  width: 1px;
+  height: 14px;
+  margin: 0 4px;
+  background: var(--sidebar-border-color);
+}
+
+.md-table-size {
+  font-variant-numeric: tabular-nums;
+}
+
+.md-table-panel {
+  position: absolute;
+  top: 18px;
+  right: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  min-width: 140px;
+  padding: 4px;
+  border-radius: 6px;
+  background: var(--popover-bg-color);
+  color: var(--text-color);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.16), 0 0 0 1px rgba(0, 0, 0, 0.06);
+}
+
+.md-table-panel[data-kind='resize'] {
+  left: 0;
+  right: auto;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+}
+
+.md-table-panel button {
+  justify-content: flex-start;
+  height: 26px;
+  padding: 0 10px;
+}
+
+.md-table-panel input {
+  width: 52px;
+  margin-left: 4px;
+  padding: 2px 4px;
+  border: 1px solid var(--sidebar-border-color);
+  border-radius: 3px;
+  background: var(--bg-color);
+  color: var(--text-color);
+  font: inherit;
+}
+
+.md-table-panel .md-table-apply {
+  justify-content: center;
+  border: 1px solid var(--sidebar-border-color);
+}
+
+.md-table-panel-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--sidebar-border-color);
 }
 
 /* ------------------------------------------------- math blocks, diagrams */

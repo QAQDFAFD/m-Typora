@@ -10,7 +10,6 @@ import {
   insertImageCommand,
   toggleEmphasisCommand,
   toggleInlineCodeCommand,
-  toggleLinkCommand,
   toggleStrongCommand,
   turnIntoTextCommand,
   wrapInBlockquoteCommand,
@@ -28,9 +27,11 @@ import { renderDiagramPreview } from './diagrams'
 import { createExtendedSyntaxPlugin } from './extended-syntax'
 import { createFocusPlugin } from './focus-plugin'
 import { createImagePlugin } from './image-view'
+import { linkEditorPlugin, openLinkEditor } from './link-editor'
 import { configureMarkdown } from './markdown-config'
 import { searchPlugin } from './search-plugin'
 import { syntaxRevealPlugin } from './syntax-reveal'
+import { createTableToolbar, runTableCommand, tableInfo, tableKeymap, type TableCommand } from './table-tools'
 
 export interface WysiwygOptions {
   root: HTMLElement
@@ -67,7 +68,11 @@ export class WysiwygEditor {
         [Crepe.Feature.AI]: false,
         // Crepe's image block stores its resize ratio in the alt text, which destroys
         // the user's alt text on save; plain Markdown images are used instead.
-        [Crepe.Feature.ImageBlock]: false
+        [Crepe.Feature.ImageBlock]: false,
+        // Crepe's table block adds drag handles over the cells; Typora uses a toolbar instead.
+        [Crepe.Feature.Table]: false,
+        // Typora has no hover toolbar on links; ⌘K edits the URL (see link-editor.ts).
+        [Crepe.Feature.LinkTooltip]: false
       },
       featureConfigs: {
         // Native caret like Typora; keep only the drop / gap cursors.
@@ -98,6 +103,9 @@ export class WysiwygEditor {
       .use(upload)
       .use(createImagePlugin(options.resolveImage))
       .use(createExtendedSyntaxPlugin(options.resolveImage))
+      .use(linkEditorPlugin)
+      .use(tableKeymap)
+      .use(createTableToolbar((command) => this.exec(command)))
       .use(syntaxRevealPlugin)
       .use(searchPlugin)
       .use(createAutoPairPlugin(options.autoPair))
@@ -149,6 +157,10 @@ export class WysiwygEditor {
     return !this.view().state.selection.empty
   }
 
+  inTable(): boolean {
+    return tableInfo(this.view().state) !== null
+  }
+
   /** Serializes the document to clean, semantic HTML (no editor chrome). */
   toHtml(): string {
     return this.crepe.editor.action((ctx) => {
@@ -178,6 +190,7 @@ export class WysiwygEditor {
   exec(command: MenuCommand): boolean {
     const view = this.view()
     const call = <T>(key: CmdKey<T>, payload?: T) => this.crepe.editor.action(callCommand(key, payload))
+    if (command.startsWith('table-')) return runTableCommand(command as TableCommand, view, call)
     const heading = /^heading-(\d)$/.exec(command)
     if (heading) {
       const level = Number(heading[1])
@@ -234,7 +247,7 @@ export class WysiwygEditor {
         return true
       }
       case 'link':
-        return call(toggleLinkCommand.key, { href: '' })
+        return openLinkEditor(view)
       case 'image': {
         // Like Typora: insert `![]()` and open its source for typing the path.
         if (!call(insertImageCommand.key, { src: '', alt: '' })) return false

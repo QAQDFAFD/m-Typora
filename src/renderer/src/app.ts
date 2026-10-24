@@ -100,6 +100,7 @@ export class App {
 
   async start(): Promise<void> {
     this.root.dataset.platform = bridge.platform
+    if (!isMacLike()) localizeShortcutHints(document.body)
     this.sidebar.setView(this.prefs.sidebarView)
     this.applyPrefs()
     await this.wysiwyg.whenReady()
@@ -228,6 +229,8 @@ export class App {
         return this.updatePrefs({ zoom: 1 })
 
       default:
+        // ⌘Enter / ⇧⌘⌫ are table accelerators; never let them act while typing in a field.
+        if (command.startsWith('table-') && this.isTypingInField()) return
         // Paragraph and Format commands go to whichever editor is visible.
         this.activeEditor().exec(command)
     }
@@ -279,6 +282,8 @@ export class App {
     try {
       const file = await bridge.readFile(path)
       this.load(file.path, file.content)
+      // In a narrow window the sidebar floats over the text; get it out of the way.
+      if (this.prefs.sidebar && window.matchMedia('(max-width: 760px)').matches) this.updatePrefs({ sidebar: false })
     } catch (error) {
       alert(`无法打开文件：${path}\n${(error as Error).message}`)
     }
@@ -606,7 +611,7 @@ export class App {
       document.addEventListener('contextmenu', (event) => {
         if (!(event.target as HTMLElement).closest('#wysiwyg, #source')) return
         event.preventDefault()
-        bridge.showContextMenu(this.activeEditor().hasSelection())
+        bridge.showContextMenu(this.activeEditor().hasSelection(), this.mode === 'wysiwyg' && this.wysiwyg.inTable())
       })
     }
 
@@ -710,4 +715,16 @@ export class App {
 
 function round(value: number): number {
   return Math.round(value * 10) / 10
+}
+
+function isMacLike(): boolean {
+  return bridge.platform === 'darwin' || (bridge.platform === 'web' && /Mac|iPhone|iPad/i.test(navigator.platform))
+}
+
+/** Rewrites ⌘ ⇧ ⌥ ⌃ in tooltips to Ctrl / Shift / Alt on Windows and Linux. */
+function localizeShortcutHints(root: HTMLElement): void {
+  const symbols: Record<string, string> = { '⌃': 'Ctrl+', '⌥': 'Alt+', '⇧': 'Shift+', '⌘': 'Ctrl+' }
+  root.querySelectorAll<HTMLElement>('[title]').forEach((el) => {
+    el.title = el.title.replace(/[⌃⌥⇧⌘]+/g, (keys) => [...new Set([...keys].map((k) => symbols[k]))].join(''))
+  })
 }

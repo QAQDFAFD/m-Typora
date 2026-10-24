@@ -8,9 +8,11 @@
   --zoom: 1;
   --base-font-size: 16px;
   --write-max-width: 1024px;
-  --ui-font: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Helvetica Neue', 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  /* macOS, then Windows, then Linux faces, so every platform gets a native-looking UI. */
+  --ui-font: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Helvetica Neue', 'Segoe UI', 'Microsoft YaHei',
+    'Noto Sans CJK SC', 'Source Han Sans SC', 'WenQuanYi Micro Hei', Ubuntu, Cantarell, sans-serif;
   --raleway: 'Raleway', var(--ui-font);
-  --monospace: Courier, 'Courier New', monospace;
+  --monospace: Courier, 'Courier New', 'Liberation Mono', 'Nimbus Mono PS', monospace;
 }
 
 * {
@@ -32,6 +34,16 @@ button {
   font: inherit;
   color: inherit;
   cursor: pointer;
+}
+
+/* Focus rings only for keyboard users, never after a mouse click. */
+button:focus {
+  outline: none;
+}
+
+button:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
 }
 
 svg {
@@ -140,8 +152,19 @@ svg {
   background: var(--item-hover-bg-color);
 }
 
-/* Windows / Linux / browser: there are no traffic lights to make room for. */
-:root:not([data-platform='darwin']) .titlebar {
+/* Windows / Linux use the native title bar (it shows the file name), so ours is not drawn. */
+:root[data-platform='win32'],
+:root[data-platform='linux'] {
+  --titlebar-height: 0px;
+}
+
+:root[data-platform='win32'] .titlebar,
+:root[data-platform='linux'] .titlebar {
+  display: none;
+}
+
+/* In a browser tab there are no traffic lights and nothing to drag. */
+:root[data-platform='web'] .titlebar {
   -webkit-app-region: no-drag;
 }
 
@@ -200,6 +223,22 @@ svg {
 
 .resizing .sidebar {
   transition: none;
+}
+
+/* Narrow windows: the sidebar floats over the document instead of squeezing it. */
+@media (max-width: 760px) {
+  .sidebar {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 25;
+    box-shadow: 4px 0 18px rgba(0, 0, 0, 0.12);
+  }
+
+  .sidebar-open .sidebar-resizer {
+    display: none !important;
+  }
 }
 
 .sidebar-resizer {

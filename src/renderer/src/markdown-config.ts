@@ -1,5 +1,6 @@
 import { remarkStringifyOptionsCtx, type Editor } from '@milkdown/kit/core'
 import { remarkGFMPlugin } from '@milkdown/kit/preset/gfm'
+import { gfmTableToMarkdown } from 'mdast-util-gfm-table'
 
 /** An "unsafe" pattern from mdast-util-to-markdown: a character that may need escaping. */
 interface UnsafeRule {
@@ -43,11 +44,34 @@ function tildesAreLiteral(value: string, before: string, after: string): boolean
   return !value.includes('~~') && !(value.startsWith('~') && before === '~') && !(value.endsWith('~') && after === '~')
 }
 
+const WIDE_CHAR = /[ᄀ-ᅟ⺀-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦]/
+
+/** Display width used to line up table columns: CJK characters count double. */
+function displayWidth(value: string): number {
+  let width = 0
+  for (const ch of value) width += WIDE_CHAR.test(ch) ? 2 : 1
+  return width
+}
+
+const gfmTable = gfmTableToMarkdown({ stringLength: displayWidth })
+
+/** Gives every delimiter cell at least three characters (`---`, `:--`, `:-:`, `--:`). */
+function widenDelimiterRow(table: string): string {
+  const lines = table.split('\n')
+  if (lines.length < 2) return table
+  lines[1] = lines[1].replace(/(:?)(-+)(:?)/g, (_m, before: string, dashes: string, after: string) => {
+    const min = 3 - before.length - after.length
+    return before + dashes.padEnd(Math.max(dashes.length, min, 1), '-') + after
+  })
+  return lines.join('\n')
+}
+
 /**
  * Makes saved Markdown match what Typora writes:
  * - "-" bullets, "---" rules, "*" emphasis and strong;
  * - `~x~` is subscript text, not strikethrough (only `~~x~~` strikes through);
- * - brackets and tildes are escaped only where they would otherwise change meaning.
+ * - brackets and tildes are escaped only where they would otherwise change meaning;
+ * - table columns line up by display width, and delimiter cells keep at least `---`.
  */
 export function configureMarkdown(editor: Editor): void {
   editor.config((ctx) => {
@@ -62,6 +86,7 @@ export function configureMarkdown(editor: Editor): void {
         strong: '*' as const,
         handlers: {
           ...prev.handlers,
+          table: (node, parent, state, info) => widenDelimiterRow(gfmTable.handlers!.table!(node, parent, state, info)),
           text: (node, parent, state, info) => {
             const inListItem = state.stack.includes('listItem')
             const relaxBrackets = bracketsAreLiteral(node.value, info.after, inListItem)

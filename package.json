@@ -32,6 +32,7 @@
     "dompurify": "^3.4.17",
     "gemoji": "^8.1.0",
     "katex": "^0.19.0",
+    "mdast-util-gfm-table": "^2.0.0",
     "mermaid": "^12.2.0"
   },
   "devDependencies": {

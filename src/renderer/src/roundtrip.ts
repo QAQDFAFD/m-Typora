@@ -30,13 +30,16 @@ export const ROUND_TRIP_CASES: Record<string, string> = {
   mathBlock: '$$\nx^2\n$$',
   escapes: 'snake_case and 2*3*4 and a_b_c',
   taskList: '- [x] done\n- [ ] todo',
-  table: '| a | b |\n| --- | --- |\n| 1 | 2 |'
+  table: '| a | b |\n| --- | --- |\n| 1 | 2 |',
+  tableAligned: '| Left | Center | Right |\n| :--- | :---: | ---: |\n| a | b | c |',
+  tablePadded: '| 场景 | 推荐     |\n| ---- | -------- |\n| 简单 | **加粗** |'
 }
 
 /** Rewrites that keep the meaning (the document renders identically) but change the text. */
 export const KNOWN_NORMALIZATIONS: Record<string, string> = {
   literalLink: 'Literal \\[a]\\(b) stays text.',
-  table: '| a | b |\n| - | - |\n| 1 | 2 |'
+  // Table source is re-padded so columns line up by display width.
+  tableAligned: '| Left | Center | Right |\n| :--- | :----: | ----: |\n| a    |    b   |     c |'
 }
 
 interface Harness {
