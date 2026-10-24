@@ -10,6 +10,7 @@
     "dev": "electron-vite dev",
     "dev:web": "vite --config vite.web.config.ts",
     "build": "electron-vite build",
+    "dist": "electron-vite build && electron-builder --publish never",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "smoke": "electron-vite build && M_TYPORA_SMOKE=out/smoke.png electron .",
@@ -39,6 +40,7 @@
   "devDependencies": {
     "@types/node": "^22.8.7",
     "electron": "^45.0.0",
+    "electron-builder": "^26.18.0",
     "electron-vite": "^6.0.0",
     "typescript": "^5.8.3",
     "vite": "^8.3.5"

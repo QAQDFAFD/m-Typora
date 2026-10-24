@@ -1,0 +1,41 @@
+appId: io.github.qaqdfafd.mtypora
+productName: m-typora
+directories:
+  output: dist
+  buildResources: build
+# electron-vite bundles every dependency into out/, so node_modules is not shipped.
+files:
+  - out/main/**
+  - out/preload/**
+  - out/renderer/**
+  - package.json
+  - "!node_modules/**"
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+fileAssociations:
+  - ext: [md, markdown]
+    name: Markdown
+    description: Markdown document
+    role: Editor
+
+mac:
+  category: public.app-category.productivity
+  # Ad-hoc signature: no Apple Developer certificate is needed and Apple Silicon can run it.
+  # With a Developer ID certificate, remove these two lines and set up notarization instead.
+  identity: "-"
+  hardenedRuntime: false
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+dmg:
+  title: ${productName} ${version}
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  artifactName: ${productName}-${version}-win-${arch}-setup.${ext}
