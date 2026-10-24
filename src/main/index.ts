@@ -2,9 +2,12 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { basename, dirname, extname, join } from 'node:path'
-import { buildMenu, contextMenu, syncMenu, titleMenu } from './menu'
+import { buildMenu, contextMenu, setCustomThemes, syncMenu, titleMenu } from './menu'
 import { readTree, searchFolder } from './files'
-import type { MenuCommand, MenuState } from '../shared/api'
+import { exportHtml, exportPdf } from './export'
+import { uploadImages } from './images'
+import { ensureThemesDir, listCustomThemes } from './themes'
+import type { HtmlExportOptions, MenuCommand, MenuState, PdfExportOptions, UploadConfig, UploadFile } from '../shared/api'
 
 const MARKDOWN_FILTERS = [
   { name: 'Markdown', extensions: ['md', 'markdown', 'mdown', 'txt'] },
@@ -25,8 +28,6 @@ if (process.env.M_TYPORA_USER_DATA) app.setPath('userData', process.env.M_TYPORA
 /** e.g. "1411x923" — lets screenshots be compared pixel-for-pixel with a reference. */
 const SMOKE_SIZE = /^(\d+)x(\d+)$/.exec(process.env.M_TYPORA_SMOKE_SIZE ?? '')
 
-const THEME_BACKGROUNDS: Partial<Record<MenuState['theme'], string>> = { night: '#363b40', newsprint: '#f3f2ee' }
-
 const dirtyWindows = new WeakSet<BrowserWindow>()
 const menuStates = new WeakMap<BrowserWindow, MenuState>()
 const pendingOpenPaths: string[] = []
@@ -40,7 +41,6 @@ function createWindow(initialPath?: string): BrowserWindow {
     show: false,
     backgroundColor: '#ffffff',
     titleBarStyle: process.platform === 'darwin' ? 'hidden' : 'default',
-    trafficLightPosition: { x: 10, y: 8 },
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -190,30 +190,24 @@ function registerIpc(): void {
     return `assets/${safeName}`
   })
 
-  ipcMain.handle('export:html', async (event, suggestedName: string, html: string) => {
-    const result = await dialog.showSaveDialog(senderWindow(event), {
-      defaultPath: `${suggestedName}.html`,
-      filters: [{ name: 'HTML', extensions: ['html'] }]
-    })
-    if (result.canceled || !result.filePath) return null
-    await writeFile(result.filePath, html, 'utf8')
-    return result.filePath
+  ipcMain.handle('image:upload', (_event, files: UploadFile[], config: UploadConfig) => uploadImages(files, config))
+
+  ipcMain.handle('export:html', (event, name: string, html: string, options: HtmlExportOptions) =>
+    exportHtml(senderWindow(event), name, html, options)
+  )
+
+  ipcMain.handle('export:pdf', (event, name: string, html: string, options: PdfExportOptions) =>
+    exportPdf(senderWindow(event), name, html, options)
+  )
+
+  ipcMain.handle('themes:list', async () => {
+    const themes = await listCustomThemes()
+    setCustomThemes(themes)
+    return themes
   })
 
-  ipcMain.handle('export:pdf', async (event, suggestedName: string) => {
-    const win = senderWindow(event)
-    const result = await dialog.showSaveDialog(win, {
-      defaultPath: `${suggestedName}.pdf`,
-      filters: [{ name: 'PDF', extensions: ['pdf'] }]
-    })
-    if (result.canceled || !result.filePath) return null
-    const pdf = await win.webContents.printToPDF({
-      printBackground: true,
-      pageSize: 'A4',
-      margins: { top: 0.7, bottom: 0.7, left: 0.7, right: 0.7 }
-    })
-    await writeFile(result.filePath, pdf)
-    return result.filePath
+  ipcMain.on('themes:open-folder', async () => {
+    void shell.openPath(await ensureThemesDir())
   })
 
   ipcMain.on('print', (event) => senderWindow(event).webContents.print({ printBackground: true }))
@@ -249,7 +243,7 @@ function registerIpc(): void {
     const win = senderWindow(event)
     menuStates.set(win, state)
     // Match the window background to the theme so resizing never flashes white.
-    win.setBackgroundColor(THEME_BACKGROUNDS[state.theme] ?? '#ffffff')
+    if (state.background) win.setBackgroundColor(state.background)
     if (BrowserWindow.getFocusedWindow() === win || BrowserWindow.getAllWindows().length === 1) syncMenu(state)
   })
 
@@ -285,11 +279,11 @@ app.on('open-file', (event, path) => {
   else pendingOpenPaths.push(path)
 })
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   app.setName('m-typora')
   app.setAboutPanelOptions({ applicationName: 'm-typora', applicationVersion: app.getVersion() })
   registerIpc()
-  buildMenu({ newWindow: () => createWindow(), send: sendMenu })
+  buildMenu({ newWindow: () => createWindow(), send: sendMenu }, await listCustomThemes().catch(() => []))
 
   const argvPath = process.argv.slice(app.isPackaged ? 1 : 2).find((arg) => /\.(md|markdown|txt)$/i.test(arg))
   const initial = pendingOpenPaths.length > 0 ? pendingOpenPaths : argvPath ? [argvPath] : [undefined]

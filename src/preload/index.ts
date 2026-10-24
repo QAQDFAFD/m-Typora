@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { MenuCommand, MTyporaApi } from '../shared/api'
 
 const api: MTyporaApi = {
@@ -11,8 +11,12 @@ const api: MTyporaApi = {
   saveFile: (path, content) => ipcRenderer.invoke('fs:save-file', path, content),
   renameFile: (path, newName) => ipcRenderer.invoke('fs:rename', path, newName),
   saveAsset: (docPath, fileName, data) => ipcRenderer.invoke('fs:save-asset', docPath, fileName, data),
-  exportHtml: (name, html) => ipcRenderer.invoke('export:html', name, html),
-  exportPdf: (name) => ipcRenderer.invoke('export:pdf', name),
+  uploadImages: (files, config) => ipcRenderer.invoke('image:upload', files, config),
+  pathForFile: (file) => webUtils.getPathForFile(file),
+  exportHtml: (name, html, options) => ipcRenderer.invoke('export:html', name, html, options),
+  exportPdf: (name, html, options) => ipcRenderer.invoke('export:pdf', name, html, options),
+  listThemes: () => ipcRenderer.invoke('themes:list'),
+  openThemeFolder: () => ipcRenderer.send('themes:open-folder'),
   print: () => ipcRenderer.send('print'),
   revealInFinder: (path) => ipcRenderer.send('shell:reveal', path),
   openExternal: (url) => ipcRenderer.send('shell:open-external', url),

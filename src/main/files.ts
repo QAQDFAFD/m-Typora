@@ -1,12 +1,11 @@
 import { open, readdir, readFile, stat } from 'node:fs/promises'
-import { join, relative } from 'node:path'
+import { basename, join, relative } from 'node:path'
 import type { SearchHit, TreeNode } from '../shared/api'
 
 const MARKDOWN_FILE = /\.(md|markdown|mdown|txt)$/i
 const IGNORED_DIRS = new Set(['node_modules', 'dist', 'out', 'build'])
 const MAX_DEPTH = 6
 const EXCERPT_BYTES = 2048
-const MAX_SEARCH_HITS = 300
 
 /** Reads a folder as a tree containing only Markdown files and folders that have some. */
 export async function readTree(root: string, depth = 0): Promise<TreeNode[]> {
@@ -76,11 +75,48 @@ export function excerptOf(markdown: string): string[] {
   return lines
 }
 
-/** Case-insensitive plain-text search across every Markdown file below `root`. */
+const MAX_HITS_PER_FILE = 20
+
+/** Case and width folding, so "ＡＢＣ", "abc" and "Abc" all match. */
+function fold(text: string): string {
+  return text.normalize('NFKC').toLowerCase()
+}
+
+/** A source line as it reads on screen: Markdown syntax removed, link and image text kept. */
+function plainLine(line: string): string {
+  return line
+    .replace(/^\s{0,3}(#{1,6}\s+|>\s?|[-*+]\s+(\[[ xX]\]\s+)?|\d+[.)]\s+)/, '')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/<(https?:[^>]+)>/g, '$1')
+    .replace(/<\/?[a-z][^>]*>/gi, '')
+    .replace(/(\*\*|__|==|~~|[*_~^`])/g, '')
+    .replace(/\s*\|\s*/g, ' ')
+    .trim()
+}
+
+/** A short excerpt of `text` around the first matching term. */
+function excerpt(text: string, terms: string[]): string {
+  const folded = fold(text)
+  const found = terms.map((term) => folded.indexOf(term)).filter((i) => i >= 0)
+  const at = found.length > 0 ? Math.min(...found) : 0
+  const start = Math.max(0, at - 40)
+  return `${start > 0 ? '…' : ''}${text.slice(start, start + 160).trim()}`
+}
+
+/**
+ * Searches every Markdown file below `root`, like Typora's folder search: the text is
+ * matched as it reads (bold, links and other syntax ignored), a phrase may continue on
+ * the next line of the same paragraph, several words separated by spaces must all
+ * appear, and file names match too (a hit with line 0).
+ */
 export async function searchFolder(root: string, query: string): Promise<SearchHit[]> {
-  const needle = query.trim().toLowerCase()
-  if (!needle) return []
-  const hits: SearchHit[] = []
+  const terms = fold(query).split(/\s+/).filter(Boolean)
+  if (terms.length === 0) return []
+  const matches = (text: string) => {
+    const folded = fold(text)
+    return terms.every((term) => folded.includes(term))
+  }
   const files: string[] = []
   const collect = (nodes: TreeNode[]) => {
     for (const node of nodes) {
@@ -90,15 +126,36 @@ export async function searchFolder(root: string, query: string): Promise<SearchH
   }
   collect(await readTree(root))
 
+  const hits: SearchHit[] = []
   for (const path of files) {
-    const content = await readFile(path, 'utf8').catch(() => '')
-    const lines = content.split(/\r?\n/)
-    for (let i = 0; i < lines.length && hits.length < MAX_SEARCH_HITS; i++) {
-      if (lines[i].toLowerCase().includes(needle)) {
-        hits.push({ path, line: i + 1, text: lines[i].trim().slice(0, 200) })
+    const fileHits: SearchHit[] = []
+    if (matches(basename(path).replace(MARKDOWN_FILE, ''))) fileHits.push({ path, line: 0, text: '' })
+
+    const lines = (await readFile(path, 'utf8').catch(() => '')).split(/\r?\n/)
+    let paragraph: Array<{ line: number; text: string; hit: boolean }> = []
+    let inFence = false
+    const flushParagraph = () => {
+      // A phrase split over the lines of one paragraph only matches the joined text.
+      if (paragraph.length > 1 && !paragraph.some((part) => part.hit)) {
+        const joined = paragraph.map((part) => part.text).join(' ')
+        if (matches(joined)) fileHits.push({ path, line: paragraph[0].line, text: excerpt(joined, terms) })
       }
+      paragraph = []
     }
-    if (hits.length >= MAX_SEARCH_HITS) break
+    for (let i = 0; i < lines.length && fileHits.length < MAX_HITS_PER_FILE; i++) {
+      const raw = lines[i]
+      if (/^\s*(```|~~~)/.test(raw)) {
+        inFence = !inFence
+        flushParagraph()
+      }
+      const plain = inFence ? raw.trim() : plainLine(raw)
+      const hit = matches(plain) || matches(raw)
+      if (hit) fileHits.push({ path, line: i + 1, text: excerpt(matches(plain) ? plain : raw.trim(), terms) })
+      if (inFence || !plain) flushParagraph()
+      else paragraph.push({ line: i + 1, text: plain, hit })
+    }
+    flushParagraph()
+    hits.push(...fileHits.sort((a, b) => a.line - b.line))
   }
-  return hits.sort((a, b) => relative(root, a.path).localeCompare(relative(root, b.path)))
+  return hits.sort((a, b) => relative(root, a.path).localeCompare(relative(root, b.path)) || a.line - b.line)
 }

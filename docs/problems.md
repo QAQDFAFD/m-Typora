@@ -1,5 +1,6 @@
 出现的问题：
 
+
 1. **在除了 night 以外的的主题下展示的左上角的mac的关闭、缩小、全屏的icon样式有问题，被压扁了**
 
 如图，暗色模式正常，其他模式变扁：![image](https://ljj-image.top/2026/10/e72d5e908df1fd1516795c517279fd72.png)![image](https://ljj-image.top/2026/10/ef0f2439072a2e474b80b8cc0e4d992d.png)

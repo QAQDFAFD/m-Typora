@@ -25,8 +25,10 @@ import { createAutoPairPlugin } from './auto-pair'
 import { codeLanguagePlugin } from './code-language'
 import { codeFenceTheme } from './code-theme'
 import { renderDiagramPreview } from './diagrams'
+import type { CodeBlockSource } from './export'
 import { createExtendedSyntaxPlugin } from './extended-syntax'
 import { createFocusPlugin } from './focus-plugin'
+import { headingKeymap } from './heading-keymap'
 import { createImagePlugin } from './image-view'
 import { linkEditorPlugin, openLinkEditor } from './link-editor'
 import { linkInputPlugin } from './link-input'
@@ -108,6 +110,7 @@ export class WysiwygEditor {
       .use(createExtendedSyntaxPlugin(options.resolveImage))
       .use(linkEditorPlugin)
       .use(tableKeymap)
+      .use(headingKeymap)
       .use(createTableToolbar((command) => this.exec(command)))
       .use(syntaxRevealPlugin)
       .use(searchPlugin)
@@ -165,6 +168,52 @@ export class WysiwygEditor {
 
   inTable(): boolean {
     return tableInfo(this.view().state) !== null
+  }
+
+  /** Language and text of every code block, in document order (export rebuilds them). */
+  codeBlocks(): CodeBlockSource[] {
+    const blocks: CodeBlockSource[] = []
+    this.view().state.doc.descendants((node) => {
+      if (node.type.name === 'code_block') blocks.push({ language: String(node.attrs.language ?? ''), code: node.textContent })
+      return node.type.name !== 'code_block'
+    })
+    return blocks
+  }
+
+  /**
+   * Hands the rendered document to `read` as it looks when not editing: the editor is
+   * blurred first, so Markdown markers around the caret are hidden again.
+   */
+  async withRenderedDocument<T>(read: (editor: HTMLElement) => Promise<T>): Promise<T> {
+    const view = this.view()
+    const focused = view.hasFocus()
+    if (focused) view.dom.blur()
+    try {
+      return await read(view.dom)
+    } finally {
+      if (focused) view.focus()
+    }
+  }
+
+  /** Images whose src is a file on disk (relative, absolute or file:). */
+  localImages(): Array<{ pos: number; src: string }> {
+    const images: Array<{ pos: number; src: string }> = []
+    this.view().state.doc.descendants((node, pos) => {
+      const src = node.type.name === 'image' ? String(node.attrs.src ?? '') : ''
+      if (src && !/^(https?:|data:|blob:)/i.test(src)) images.push({ pos, src })
+    })
+    return images
+  }
+
+  /** Points images at new sources (one undoable step); positions come from localImages(). */
+  setImageSources(changes: Array<{ pos: number; src: string }>): void {
+    const view = this.view()
+    const tr = view.state.tr
+    for (const { pos, src } of changes) {
+      const node = tr.doc.nodeAt(pos)
+      if (node?.type.name === 'image') tr.setNodeMarkup(pos, undefined, { ...node.attrs, src })
+    }
+    if (tr.docChanged) view.dispatch(tr)
   }
 
   /** Serializes the document to clean, semantic HTML (no editor chrome). */

@@ -1,5 +1,5 @@
 import { app, BrowserWindow, Menu, shell, type MenuItemConstructorOptions } from 'electron'
-import { THEMES, type MenuCommand, type MenuState } from '../shared/api'
+import { THEMES, type CustomTheme, type MenuCommand, type MenuState } from '../shared/api'
 
 type Send = (command: MenuCommand, win?: BrowserWindow) => void
 
@@ -9,6 +9,10 @@ interface MenuActions {
 }
 
 const isMac = process.platform === 'darwin'
+
+let actions: MenuActions | null = null
+let customThemes: Array<Pick<CustomTheme, 'id' | 'label'>> = []
+let lastState: MenuState | null = null
 /** ⌃⌘ on macOS, Ctrl+Shift elsewhere — Typora's binding for view switches and images. */
 const ctrlCmd = (key: string) => (isMac ? `Ctrl+Cmd+${key}` : `Ctrl+Shift+${key}`)
 
@@ -81,13 +85,19 @@ function formatItems(send: Send): MenuItemConstructorOptions[] {
     { type: 'separator' },
     c('超链接', 'link', 'CmdOrCtrl+K'),
     c('图像', 'image', ctrlCmd('I')),
+    c('上传全部本地图片', 'upload-images'),
     { type: 'separator' },
     c('清除样式', 'clear-format', 'CmdOrCtrl+\\')
   ]
 }
 
-export function buildMenu({ newWindow, send }: MenuActions): void {
+export function buildMenu(menuActions: MenuActions, themes: Array<Pick<CustomTheme, 'id' | 'label'>> = customThemes): void {
+  actions = menuActions
+  customThemes = themes.map(({ id, label }) => ({ id, label }))
+  const { newWindow, send } = menuActions
   const c = (label: string, command: MenuCommand, accelerator?: string) => commandItem(send, label, command, accelerator)
+  const themeItem = (id: CustomTheme['id'] | (typeof THEMES)[number]['id'], label: string) =>
+    commandItem(send, label, `theme-${id}`, undefined, { type: 'radio' })
 
   const template: MenuItemConstructorOptions[] = [
     ...(isMac
@@ -205,7 +215,12 @@ export function buildMenu({ newWindow, send }: MenuActions): void {
     },
     {
       label: '主题',
-      submenu: THEMES.map((theme) => commandItem(send, theme.label, `theme-${theme.id}`, undefined, { type: 'radio' }))
+      submenu: [
+        ...THEMES.map((theme) => themeItem(theme.id, theme.label)),
+        ...(customThemes.length > 0 ? [{ type: 'separator' as const }, ...customThemes.map((theme) => themeItem(theme.id, theme.label))] : []),
+        { type: 'separator' },
+        c('打开主题文件夹', 'open-theme-folder')
+      ]
     },
     { role: 'windowMenu', label: '窗口' },
     {
@@ -220,10 +235,18 @@ export function buildMenu({ newWindow, send }: MenuActions): void {
   ]
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+  if (lastState) syncMenu(lastState)
+}
+
+/** Rebuilds the Theme menu when the theme folder's contents changed. */
+export function setCustomThemes(themes: CustomTheme[]): void {
+  const same = themes.length === customThemes.length && themes.every((theme, i) => theme.id === customThemes[i].id && theme.label === customThemes[i].label)
+  if (!same && actions) buildMenu(actions, themes)
 }
 
 /** Mirrors renderer state into the native menu's checkmarks. */
 export function syncMenu(state: MenuState): void {
+  lastState = state
   const menu = Menu.getApplicationMenu()
   if (!menu) return
   const check = (id: string, value: boolean) => {
