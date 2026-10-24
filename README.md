@@ -4,6 +4,18 @@
 
 界面以 Typora 1.13（macOS，默认 Github 主题）为参照：在同一窗口尺寸下逐项测量字号、行距、边距和配色后还原；正文、列表、代码块和文档列表的行位置与原版的偏差在 0–4px 以内。实现原理与对照方法见 [docs/typora-architecture.md](docs/typora-architecture.md)。所有代码、样式和图标均为原创，没有使用 Typora 的任何代码或资源。
 
+## 下载
+
+每次合并或推送到 `main`，GitHub Actions 都会自动打包 macOS 和 Windows 客户端，并更新预发布版本 [latest-main](https://github.com/QAQDFAFD/m-Typora/releases/tag/latest-main)：
+
+| 系统 | 安装包 |
+| --- | --- |
+| macOS（Apple 芯片） | `m-typora-<版本>-mac-arm64.dmg` |
+| macOS（Intel） | `m-typora-<版本>-mac-x64.dmg` |
+| Windows（64 位） | `m-typora-<版本>-win-x64-setup.exe` |
+
+安装包没有使用付费的开发者证书签名，首次打开时系统会拦截：macOS 在「系统设置 › 隐私与安全性」中点「仍要打开」，Windows 在 SmartScreen 提示中点「更多信息 › 仍要运行」。发往 `main` 的 Pull Request 也会打包，安装包在该次 Actions 运行的 Artifacts 里。
+
 ## 功能
 
 **编辑**
@@ -57,7 +69,10 @@ npm run dev:web    # 只在浏览器中运行编辑器界面（http://localhost:
 npm run typecheck
 npm run build      # 输出到 out/
 npm run smoke      # 构建后启动一次 Electron，截图到 out/smoke.png 并退出
+npm run dist -- --mac   # 打包 macOS 的 dmg / zip 到 dist/（Windows 用 --win）
 ```
+
+打包配置在 [electron-builder.yml](electron-builder.yml)，自动打包流程在 [.github/workflows/desktop-build.yml](.github/workflows/desktop-build.yml)。
 
 冒烟测试可以指定文件、文件夹和窗口尺寸，便于与参考截图逐像素对比：
 
@@ -96,6 +111,7 @@ src/
         ├── themes/           Github、Newsprint、Night、Pixyll、Whitey
         └── styles/           窗口外框与编辑器结构样式
 samples/             对照用的示例文档
+build/               应用图标（icon.svg 为源文件）
 ```
 
 ## 已知差异

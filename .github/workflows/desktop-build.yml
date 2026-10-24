@@ -1,0 +1,107 @@
+name: Desktop build
+
+# Every merge or push to main builds the macOS and Windows clients and replaces the
+# "latest-main" pre-release with them. Pull requests into main are built too (as
+# downloadable workflow artifacts) so packaging problems show up before merging.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-build-${{ github.ref }}
+  # Superseded PR builds are cancelled; main builds queue so releases never race.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-latest
+            platform: --mac
+          - name: Windows
+            os: windows-latest
+            platform: --win
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - name: Package
+        run: npm run dist -- ${{ matrix.platform }}
+        env:
+          # No certificate: macOS builds get an ad-hoc signature (see electron-builder.yml),
+          # which needs no secrets and is therefore safe on pull requests as well.
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+          CSC_FOR_PULL_REQUEST: true
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: m-typora-${{ matrix.name }}
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.exe
+          if-no-files-found: error
+
+  release:
+    name: Publish latest main build
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Replace the latest-main pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          link() {
+            local file
+            file=$(cd dist && ls $1)
+            echo "[$file](https://github.com/$GH_REPO/releases/download/latest-main/$file)"
+          }
+          cat > notes.md <<EOF
+          main 分支 ${GITHUB_SHA::7} 的自动构建；每次合并或推送到 main 都会用新版本替换这里的文件。
+
+          | 系统 | 下载 |
+          | --- | --- |
+          | macOS（Apple 芯片） | $(link '*mac-arm64.dmg') |
+          | macOS（Intel） | $(link '*mac-x64.dmg') |
+          | Windows（64 位） | $(link '*win-x64-setup.exe') |
+
+          安装包没有使用付费的开发者证书签名，首次打开时系统会拦截：
+
+          - **macOS**：先打开一次，被拦截后到「系统设置 › 隐私与安全性」点「仍要打开」；或在终端运行 \`xattr -dr com.apple.quarantine /Applications/m-typora.app\`。
+          - **Windows**：SmartScreen 提示时点「更多信息 › 仍要运行」。
+          EOF
+          gh release delete latest-main --yes --cleanup-tag || true
+          gh release create latest-main dist/* \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "m-typora 最新构建（main）" \
+            --notes-file notes.md
