@@ -60,7 +60,10 @@ export function excerptOf(markdown: string): string[] {
       continue
     }
     if (inFence) continue
-    const text = raw
+    // Table rows read as their cell text; delimiter rows are skipped.
+    if (/^\s*\|?(\s*:?-+:?\s*\|)+\s*:?-*:?\s*$/.test(raw)) continue
+    const line = /^\s*\|/.test(raw) ? raw.split('|').map((cell) => cell.trim()).filter(Boolean).join('  ') : raw
+    const text = line
       .replace(/^\s{0,3}(#{1,6}\s+|>\s?|[-*+]\s+(\[[ xX]\]\s+)?|\d+[.)]\s+)/, '')
       .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
       .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')

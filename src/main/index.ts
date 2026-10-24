@@ -15,8 +15,12 @@ const MARKDOWN_FILTERS = [
 const SMOKE_OUTPUT = process.env.M_TYPORA_SMOKE
 const SMOKE_FILE = process.env.M_TYPORA_SMOKE_FILE
 const SMOKE_FOLDER = process.env.M_TYPORA_SMOKE_FOLDER
+/** Automated tests drive the app over the inspector without showing a window. */
+const HEADLESS = Boolean(SMOKE_OUTPUT || process.env.M_TYPORA_HEADLESS)
 /** e.g. "1411x923" — lets screenshots be compared pixel-for-pixel with a reference. */
 const SMOKE_SIZE = /^(\d+)x(\d+)$/.exec(process.env.M_TYPORA_SMOKE_SIZE ?? '')
+
+const THEME_BACKGROUNDS: Partial<Record<MenuState['theme'], string>> = { night: '#363b40', newsprint: '#f3f2ee' }
 
 const dirtyWindows = new WeakSet<BrowserWindow>()
 const menuStates = new WeakMap<BrowserWindow, MenuState>()
@@ -42,7 +46,7 @@ function createWindow(initialPath?: string): BrowserWindow {
   })
 
   win.once('ready-to-show', () => {
-    if (!SMOKE_OUTPUT) win.show()
+    if (!HEADLESS) win.show()
   })
 
   win.on('focus', () => {
@@ -223,9 +227,9 @@ function registerIpc(): void {
     return (['save', 'discard', 'cancel'] as const)[response]
   })
 
-  ipcMain.on('menu:context', (event, hasSelection: boolean) => {
+  ipcMain.on('menu:context', (event, hasSelection: boolean, inTable: boolean) => {
     const win = senderWindow(event)
-    contextMenu((command) => sendMenu(command, win), hasSelection).popup({ window: win })
+    contextMenu((command) => sendMenu(command, win), hasSelection, inTable).popup({ window: win })
   })
 
   ipcMain.on('menu:title', (event, hasFile: boolean) => {
@@ -236,15 +240,20 @@ function registerIpc(): void {
   ipcMain.on('menu:sync', (event, state: MenuState) => {
     const win = senderWindow(event)
     menuStates.set(win, state)
+    // Match the window background to the theme so resizing never flashes white.
+    win.setBackgroundColor(THEME_BACKGROUNDS[state.theme] ?? '#ffffff')
     if (BrowserWindow.getFocusedWindow() === win || BrowserWindow.getAllWindows().length === 1) syncMenu(state)
   })
 
   ipcMain.on('window:set-title', (event, title: string, edited: boolean, path: string | null) => {
     const win = senderWindow(event)
-    win.setTitle(title)
     if (process.platform === 'darwin') {
+      win.setTitle(title)
       win.setDocumentEdited(edited)
       win.setRepresentedFilename(path ?? '')
+    } else {
+      // The native title bar is the only title on Windows / Linux, so it carries the edited mark.
+      win.setTitle(`${edited ? '• ' : ''}${title} - m-typora`)
     }
   })
 

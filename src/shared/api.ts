@@ -83,6 +83,21 @@ export type MenuCommand =
   | 'task-list'
   | 'hr'
   | 'front-matter'
+  // Paragraph › Table
+  | 'table-row-above'
+  | 'table-row-below'
+  | 'table-col-left'
+  | 'table-col-right'
+  | 'table-row-up'
+  | 'table-row-down'
+  | 'table-col-move-left'
+  | 'table-col-move-right'
+  | 'table-delete-row'
+  | 'table-delete-col'
+  | 'table-delete'
+  | 'table-align-left'
+  | 'table-align-center'
+  | 'table-align-right'
   // Format
   | 'strong'
   | 'emphasis'
@@ -140,7 +155,7 @@ export interface MTyporaApi {
   openExternal(url: string): void
   setTitle(title: string, edited: boolean, path: string | null): void
   confirmDiscard(name: string): Promise<'save' | 'discard' | 'cancel'>
-  showContextMenu(hasSelection: boolean): void
+  showContextMenu(hasSelection: boolean, inTable: boolean): void
   showTitleMenu(hasFile: boolean): void
   syncMenu(state: MenuState): void
   onMenu(handler: (command: MenuCommand) => void): void

@@ -31,7 +31,7 @@ function paragraphItems(send: Send): MenuItemConstructorOptions[] {
     c('提升标题级别', 'heading-up', 'CmdOrCtrl+='),
     c('降低标题级别', 'heading-down', 'CmdOrCtrl+-'),
     { type: 'separator' },
-    c('表格', 'table', 'Alt+CmdOrCtrl+T'),
+    { label: '表格', submenu: [c('插入表格', 'table', 'Alt+CmdOrCtrl+T'), { type: 'separator' }, ...tableItems(send)] },
     c('代码块', 'code-fence', 'Alt+CmdOrCtrl+C'),
     c('公式块', 'math-block', 'Alt+CmdOrCtrl+B'),
     { type: 'separator' },
@@ -43,6 +43,30 @@ function paragraphItems(send: Send): MenuItemConstructorOptions[] {
     { type: 'separator' },
     c('水平分割线', 'hr', 'Alt+CmdOrCtrl+-'),
     c('YAML Front Matter', 'front-matter')
+  ]
+}
+
+/** Row / column operations (Paragraph › Table and the table context menu). */
+function tableItems(send: Send): MenuItemConstructorOptions[] {
+  const c = (label: string, command: MenuCommand, accelerator?: string) => commandItem(send, label, command, accelerator, { id: undefined })
+  return [
+    c('上方插入行', 'table-row-above'),
+    c('下方插入行', 'table-row-below', 'CmdOrCtrl+Enter'),
+    c('左侧插入列', 'table-col-left'),
+    c('右侧插入列', 'table-col-right'),
+    { type: 'separator' },
+    c('上移该行', 'table-row-up'),
+    c('下移该行', 'table-row-down'),
+    c('左移该列', 'table-col-move-left'),
+    c('右移该列', 'table-col-move-right'),
+    { type: 'separator' },
+    c('左对齐', 'table-align-left'),
+    c('居中对齐', 'table-align-center'),
+    c('右对齐', 'table-align-right'),
+    { type: 'separator' },
+    c('删除行', 'table-delete-row', 'CmdOrCtrl+Shift+Backspace'),
+    c('删除列', 'table-delete-col'),
+    c('删除表格', 'table-delete')
   ]
 }
 
@@ -219,11 +243,14 @@ export function syncMenu(state: MenuState): void {
   check('toggle-focus', state.focus)
   check('toggle-typewriter', state.typewriter)
   check('toggle-statusbar', state.statusBar)
-  for (const theme of THEMES) check(`theme-${theme.id}`, theme.id === state.theme)
+  // Assigning `checked` on a radio item always selects it (Electron ignores the value),
+  // so only the active theme may be assigned.
+  const themeItem = menu.getMenuItemById(`theme-${state.theme}`)
+  if (themeItem && !themeItem.checked) themeItem.checked = true
   for (const id of ['rename', 'reveal-in-finder', 'copy-path']) enable(id, state.hasFile)
 }
 
-export function contextMenu(send: Send, hasSelection: boolean): Menu {
+export function contextMenu(send: Send, hasSelection: boolean, inTable: boolean): Menu {
   const c = (label: string, command: MenuCommand) => commandItem(send, label, command, undefined, { id: undefined })
   return Menu.buildFromTemplate([
     { role: 'cut', label: '剪切', enabled: hasSelection },
@@ -233,6 +260,7 @@ export function contextMenu(send: Send, hasSelection: boolean): Menu {
     c('拷贝为 Markdown', 'copy-markdown'),
     { role: 'pasteAndMatchStyle', label: '粘贴为纯文本' },
     { type: 'separator' },
+    ...(inTable ? [{ label: '表格', submenu: tableItems(send).map(stripAccelerator) }, { type: 'separator' as const }] : []),
     { label: '段落', submenu: paragraphItems(send).map(stripAccelerator) },
     { label: '格式', submenu: formatItems(send).map(stripAccelerator) },
     { type: 'separator' },
