@@ -22,16 +22,19 @@ import { upload, uploadConfig } from '@milkdown/kit/plugin/upload'
 import { callCommand, replaceAll } from '@milkdown/kit/utils'
 import type { MenuCommand } from '../../shared/api'
 import { createAutoPairPlugin } from './auto-pair'
+import { codeLanguagePlugin } from './code-language'
 import { codeFenceTheme } from './code-theme'
 import { renderDiagramPreview } from './diagrams'
 import { createExtendedSyntaxPlugin } from './extended-syntax'
 import { createFocusPlugin } from './focus-plugin'
 import { createImagePlugin } from './image-view'
 import { linkEditorPlugin, openLinkEditor } from './link-editor'
+import { linkInputPlugin } from './link-input'
+import { mathInlineEditPlugin } from './math-inline'
 import { configureMarkdown } from './markdown-config'
 import { searchPlugin } from './search-plugin'
 import { syntaxRevealPlugin } from './syntax-reveal'
-import { createTableToolbar, runTableCommand, tableInfo, tableKeymap, type TableCommand } from './table-tools'
+import { createTableToolbar, focusTableNear, runTableCommand, tableInfo, tableKeymap, type TableCommand } from './table-tools'
 
 export interface WysiwygOptions {
   root: HTMLElement
@@ -108,6 +111,9 @@ export class WysiwygEditor {
       .use(createTableToolbar((command) => this.exec(command)))
       .use(syntaxRevealPlugin)
       .use(searchPlugin)
+      .use(linkInputPlugin)
+      .use(codeLanguagePlugin)
+      .use(mathInlineEditPlugin)
       .use(createAutoPairPlugin(options.autoPair))
       .use(createFocusPlugin(options.onCursorMove))
     this.crepe.on((listener) => {
@@ -226,8 +232,12 @@ export class WysiwygEditor {
         return call(createCodeBlockCommand.key, '')
       case 'math-block':
         return call(createCodeBlockCommand.key, 'latex')
-      case 'table':
-        return call(insertTableCommand.key, { row: 3, col: 3 })
+      case 'table': {
+        const at = view.state.selection.from
+        if (!call(insertTableCommand.key, { row: 3, col: 3 })) return false
+        focusTableNear(view, at)
+        return true
+      }
       case 'hr':
         return call(insertHrCommand.key)
       case 'strong':

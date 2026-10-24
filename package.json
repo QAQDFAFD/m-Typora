@@ -12,7 +12,8 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "smoke": "electron-vite build && M_TYPORA_SMOKE=out/smoke.png electron ."
+    "smoke": "electron-vite build && M_TYPORA_SMOKE=out/smoke.png electron .",
+    "test:e2e": "electron-vite build && node scripts/e2e/run.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",

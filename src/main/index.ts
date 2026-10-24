@@ -17,6 +17,11 @@ const SMOKE_FILE = process.env.M_TYPORA_SMOKE_FILE
 const SMOKE_FOLDER = process.env.M_TYPORA_SMOKE_FOLDER
 /** Automated tests drive the app over the inspector without showing a window. */
 const HEADLESS = Boolean(SMOKE_OUTPUT || process.env.M_TYPORA_HEADLESS)
+/** End-to-end tests: show the window without taking focus from the user's other apps. */
+const E2E = Boolean(process.env.M_TYPORA_E2E)
+
+// Tests run with their own profile so they never touch the user's preferences.
+if (process.env.M_TYPORA_USER_DATA) app.setPath('userData', process.env.M_TYPORA_USER_DATA)
 /** e.g. "1411x923" — lets screenshots be compared pixel-for-pixel with a reference. */
 const SMOKE_SIZE = /^(\d+)x(\d+)$/.exec(process.env.M_TYPORA_SMOKE_SIZE ?? '')
 
@@ -41,12 +46,15 @@ function createWindow(initialPath?: string): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
-      spellcheck: false
+      spellcheck: false,
+      // Tests keep running at full speed while the user works in other windows.
+      backgroundThrottling: !E2E
     }
   })
 
   win.once('ready-to-show', () => {
-    if (!HEADLESS) win.show()
+    if (E2E) win.showInactive()
+    else if (!HEADLESS) win.show()
   })
 
   win.on('focus', () => {
