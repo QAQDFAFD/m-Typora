@@ -1513,6 +1513,33 @@ try {
     text = await save(path)
     expect(text.includes('End **bold**X\n') && text.includes('Keep \\*\\*this\\* word'), `saved ${JSON.stringify(text)}`)
   })
+
+  console.log('R. 问题清单第三轮 (docs/problems.md)')
+  // Whether the footer button has the theme's active-item gray behind it.
+  const toggleGray = (id) =>
+    q(`(() => { const probe = document.body.appendChild(document.createElement('div')); probe.style.background = 'var(--active-file-bg-color)'
+      const gray = getComputedStyle(probe).backgroundColor; probe.remove(); return getComputedStyle(document.getElementById('${id}')).backgroundColor === gray })()`)
+  await test('R1', '侧边栏、源码按钮打开时带浅灰背景', async () => {
+    await openFresh('Text.\n')
+    const sidebar = await q(`document.documentElement.classList.contains('sidebar-open')`)
+    if (sidebar) await app.menu('toggle-sidebar')
+    for (const theme of ['github', 'night']) {
+      await app.menu(`theme-${theme}`)
+      await hoverFooter()
+      expect(!(await toggleGray('toggle-mode')) && !(await toggleGray('toggle-sidebar')), `${theme}: gray while off`)
+      // Clicked with the mouse still on the button: the gray is not replaced by the hover background.
+      await app.click('#toggle-mode')
+      await hoverFooter()
+      await app.click('#toggle-sidebar')
+      await hoverFooter()
+      expect((await toggleGray('toggle-mode')) && (await toggleGray('toggle-sidebar')), `${theme}: not gray while on`)
+      await app.click('#toggle-sidebar')
+      await hoverFooter()
+      await app.click('#toggle-mode')
+    }
+    await app.menu('theme-github')
+    if (sidebar) await app.menu('toggle-sidebar')
+  })
 } finally {
   const errors = app.logs
     .join('')
