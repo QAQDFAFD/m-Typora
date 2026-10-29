@@ -2,8 +2,8 @@ import { open, readdir, readFile, stat } from 'node:fs/promises'
 import { basename, join, relative } from 'node:path'
 import type { SearchHit, TreeNode } from '../shared/api'
 
-const MARKDOWN_FILE = /\.(md|markdown|mdown|txt)$/i
-const IGNORED_DIRS = new Set(['node_modules', 'dist', 'out', 'build'])
+export const MARKDOWN_FILE = /\.(md|markdown|mdown|txt)$/i
+export const IGNORED_DIRS = new Set(['node_modules', 'dist', 'out', 'build'])
 const MAX_DEPTH = 6
 const EXCERPT_BYTES = 2048
 

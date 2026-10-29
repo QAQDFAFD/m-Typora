@@ -1,11 +1,13 @@
 import type { EditorView } from '@milkdown/kit/prose/view'
-import type { CustomTheme, MenuCommand, SearchHit, SidebarView, ThemeId, UploadConfig, UploadFile } from '../../shared/api'
+import type { CustomTheme, DraftRestore, ExternalChange, MenuCommand, SearchHit, SidebarView, ThemeId, UploadConfig, UploadFile } from '../../shared/api'
 import { bridge, isDesktop } from './bridge'
 import { buildExportPage, buildPlainHtml } from './export'
 import { FindBar } from './findbar'
 import { FrontMatterBlock, joinFrontMatter, splitFrontMatter } from './front-matter'
+import { HistoryDialog } from './history-dialog'
 import { countText, dirName, extractHeadings, fileName, stripExtension, type Heading } from './markdown-utils'
 import { PreferencesDialog } from './preferences'
+import { NoticeBar } from './notice'
 import { loadPrefs, savePrefs, type Prefs } from './prefs'
 import { QuickOpen } from './quick-open'
 import { clearSearch, replaceAll, replaceCurrent, searchStatus, setSearchQuery, stepSearch } from './search-plugin'
@@ -26,6 +28,12 @@ export class App {
   private savedText = ''
   private savedNormalized = ''
   private dirty = false
+  /** The file was deleted or moved away on disk; saving asks where to put it. */
+  private missing = false
+  /** The user chose to keep their version over one changed on disk: the next save overwrites it. */
+  private forceNextSave = false
+  /** A crash-recovery draft of this window exists in the main process. */
+  private hasDraft = false
   private mode: Mode = 'wysiwyg'
   private prefs: Prefs = loadPrefs()
   private customThemes: CustomTheme[] = []
@@ -47,9 +55,12 @@ export class App {
   private findBar: FindBar
   private quickOpen: QuickOpen
   private preferences: PreferencesDialog
+  private history: HistoryDialog
+  private notice: NoticeBar
 
   private refreshTimer = 0
   private autoSaveTimer = 0
+  private draftTimer = 0
   private footerTimer = 0
   private toastTimer = 0
   private pinnedHeading: { index: number; until: number } | null = null
@@ -106,9 +117,25 @@ export class App {
       customThemes: () => this.customThemes.map(({ id, label }) => ({ id, label })),
       fileManager: bridge.platform === 'darwin' ? '访达' : '文件夹'
     })
+    this.history = new HistoryDialog($('#history'), {
+      onRestore: (content) => this.replaceContent(content),
+      fileManager: bridge.platform === 'darwin' ? '访达' : '文件夹'
+    })
+    this.notice = new NoticeBar($('#notice'), () => this.syncDirtyState())
   }
 
   async start(): Promise<void> {
+    // Messages can arrive while the editor is still being created (a file to open, a draft to
+    // restore): listen right away and handle them once it is ready.
+    let markStarted = () => {}
+    const started = new Promise<void>((resolve) => (markStarted = resolve))
+    const whenStarted = <T extends unknown[]>(handler: (...args: T) => unknown) => (...args: T) => void started.then(() => handler(...args))
+    bridge.onMenu(whenStarted((command) => this.run(command)))
+    bridge.onOpenPath(whenStarted((path) => this.openPath(path)))
+    bridge.onFileChanged(whenStarted((path, change) => this.onExternalChange(path, change)))
+    bridge.onFolderChanged(whenStarted(() => this.refreshFolder()))
+    bridge.onDraftRestore(whenStarted((draft) => this.restoreDraft(draft)))
+
     this.root.dataset.platform = bridge.platform
     if (!isMacLike()) localizeShortcutHints(document.body)
     this.sidebar.setView(this.prefs.sidebarView)
@@ -120,17 +147,19 @@ export class App {
     this.applyPrefs()
     await this.wysiwyg.whenReady()
     this.load(null, '')
-
-    bridge.onMenu((command) => this.run(command))
-    bridge.onOpenPath((path) => this.openPath(path))
     this.bindUi()
     if (!isDesktop) this.bindWebShortcuts()
 
     if (isDesktop && this.prefs.lastFolder) {
       const folder = this.prefs.lastFolder
-      bridge.readFolder(folder).then((tree) => tree.length > 0 && this.sidebar.setFolder(folder, tree))
+      bridge.readFolder(folder).then((tree) => {
+        if (tree.length === 0) return
+        this.sidebar.setFolder(folder, tree)
+        bridge.watchFolder(folder)
+      })
     }
     this.wysiwyg.focus()
+    markStarted()
   }
 
   // ---------------------------------------------------------------- commands
@@ -166,6 +195,9 @@ export class App {
         return
       case 'rename':
         return this.path ? this.startRename() : void this.save(true)
+      case 'history':
+        if (this.path) await this.history.open(this.path)
+        return
       case 'reveal-in-finder':
         if (this.path) bridge.revealInFinder(this.path)
         return
@@ -272,8 +304,14 @@ export class App {
 
   // --------------------------------------------------------------- documents
 
-  private load(path: string | null, content: string): void {
+  /** Shows `content` as the saved state of `path`. `keepView` keeps the scroll position and caret (a reload). */
+  private load(path: string | null, content: string, keepView = false): void {
+    const scrollTop = this.scroller.scrollTop
+    const caret = this.wysiwyg.view().state.selection.from
     this.path = path
+    this.missing = false
+    this.forceNextSave = false
+    this.notice.hide()
     const { yaml, body } = splitFrontMatter(content)
     this.frontMatter.set(yaml)
     this.wysiwyg.setMarkdown(body, true)
@@ -283,9 +321,90 @@ export class App {
     if (path) this.rememberRecent(path)
     this.setDirty(false)
     this.sidebar.setActiveFile(path)
-    this.scroller.scrollTop = 0
+    if (keepView && this.mode === 'wysiwyg') this.wysiwyg.setCursor(caret)
+    this.scroller.scrollTop = keepView ? scrollTop : 0
     this.refreshDerived()
     if (this.findBar.isOpen()) this.closeFindBar()
+  }
+
+  /** Replaces the text as an ordinary (undoable) edit: a restored version or recovered draft. */
+  private replaceContent(markdown: string): void {
+    const { yaml, body } = splitFrontMatter(markdown)
+    if (this.mode === 'source') {
+      this.source.setMarkdown(markdown)
+    } else {
+      this.frontMatter.set(yaml)
+      this.wysiwyg.setMarkdown(body, false)
+    }
+    this.onContentChange()
+  }
+
+  private async reloadFromDisk(): Promise<void> {
+    if (!this.path) return
+    try {
+      const file = await bridge.readFile(this.path)
+      this.load(file.path, file.content, true)
+    } catch {
+      // Gone again in the meantime: the watcher reports that separately.
+    }
+  }
+
+  /** Another program changed, removed or brought back the open file. */
+  private onExternalChange(path: string, change: ExternalChange): void {
+    if (path !== this.path) return
+    if (change === 'deleted') {
+      this.missing = true
+      this.setDirty(true)
+      this.notice.show('deleted', `“${fileName(path)}”已被删除或移动。保存时需要重新选择位置。`, [
+        { label: '另存为…', primary: true, run: () => void this.save(true) }
+      ])
+      return
+    }
+    this.missing = false
+    this.notice.hide('deleted')
+    if (change === 'restored') return this.onContentChange()
+    if (!this.dirty) return void this.reloadFromDisk()
+    this.showConflict()
+  }
+
+  private showConflict(): void {
+    this.notice.show('conflict', `“${fileName(this.path)}”已在外部被修改，与你未保存的修改冲突。`, [
+      { label: '载入外部版本', run: () => void this.reloadFromDisk() },
+      {
+        label: '保留我的版本',
+        primary: true,
+        run: () => {
+          this.forceNextSave = true
+          this.notice.hide()
+          if (this.canAutoSave()) void this.save(false)
+        }
+      }
+    ])
+  }
+
+  /** Brings back the unsaved text of a window that crashed (see main/drafts.ts). */
+  private async restoreDraft(draft: DraftRestore): Promise<void> {
+    const disk = draft.path ? await bridge.readFile(draft.path).then((file) => file.content).catch(() => null) : null
+    const discard = () => (draft.path && disk !== null ? this.load(draft.path, disk) : this.load(null, ''))
+    this.load(draft.path, disk ?? '')
+    // The main process still holds this window's draft until it is saved or discarded.
+    this.hasDraft = true
+    this.missing = Boolean(draft.path) && disk === null
+    this.replaceContent(draft.content)
+    const changed = draft.diskChanged && disk !== null
+    this.notice.show(
+      'restored',
+      changed ? `已恢复上次未保存的内容，但“${fileName(draft.path)}”在此期间被外部修改过。` : '已恢复上次未保存的内容。',
+      changed
+        ? [
+            { label: '丢弃', run: discard },
+            { label: '另存为副本…', primary: true, run: () => void this.save(true) }
+          ]
+        : [
+            { label: '丢弃', run: discard },
+            { label: '保存', primary: true, run: () => void this.save(false) }
+          ]
+    )
   }
 
   private async openPath(path: string): Promise<void> {
@@ -294,7 +413,7 @@ export class App {
       this.showFolder(path, tree)
       return
     }
-    if (path === this.path || !(await this.confirmLeave())) return
+    if (path === this.path || (await bridge.focusOpenWindow(path)) || !(await this.confirmLeave())) return
     try {
       const file = await bridge.readFile(path)
       this.load(file.path, file.content)
@@ -322,6 +441,7 @@ export class App {
     this.sidebar.setFolder(root, tree)
     const view = this.prefs.sidebarView === 'outline' || this.prefs.sidebarView === 'search' ? 'articles' : this.prefs.sidebarView
     this.updatePrefs({ lastFolder: root, sidebar: true, sidebarView: view })
+    bridge.watchFolder(root)
   }
 
   private async refreshFolder(): Promise<void> {
@@ -339,14 +459,34 @@ export class App {
   }
 
   private async save(saveAs: boolean): Promise<boolean> {
+    window.clearTimeout(this.autoSaveTimer)
     const content = this.currentMarkdown()
-    const target = await bridge.saveFile(saveAs ? null : this.path, content)
-    if (!target) return false
+    let result: Awaited<ReturnType<typeof bridge.saveFile>>
+    try {
+      result = await bridge.saveFile(saveAs || this.missing ? null : this.path, content, {
+        force: this.forceNextSave,
+        suggestedPath: this.path ?? undefined
+      })
+    } catch (error) {
+      // The file on disk is untouched (see main/atomic.ts); the text stays here and in the draft.
+      this.toast(`保存失败：${errorMessage(error)}`, 'error')
+      return false
+    }
+    if (!result) return false
+    if ('conflict' in result) {
+      this.showConflict()
+      return false
+    }
+    const target = result.path
     const isNewFile = isDesktop && target !== this.path
     if (isDesktop) this.path = target
     this.savedText = content
     this.savedNormalized = content
-    this.setDirty(false)
+    this.missing = false
+    this.forceNextSave = false
+    this.notice.hide()
+    // Typing during the save left changes the file does not have yet.
+    this.setDirty(this.currentMarkdown() !== content)
     if (this.path) this.rememberRecent(this.path)
     this.sidebar.setActiveFile(this.path)
     if (isNewFile || this.sidebar.getView() === 'articles') void this.refreshFolder()
@@ -360,15 +500,35 @@ export class App {
 
   private onContentChange(): void {
     const markdown = this.currentMarkdown()
-    this.setDirty(markdown !== this.savedText && markdown !== this.savedNormalized)
+    this.setDirty(this.missing || (markdown !== this.savedText && markdown !== this.savedNormalized))
     this.hideFooterWhileTyping()
     window.clearTimeout(this.refreshTimer)
     this.refreshTimer = window.setTimeout(() => this.refreshDerived(), 150)
     if (this.findBar.isOpen()) this.updateFindCount()
-    if (this.prefs.autoSave && this.path && this.dirty) {
+    if (this.dirty && this.canAutoSave()) {
       window.clearTimeout(this.autoSaveTimer)
-      this.autoSaveTimer = window.setTimeout(() => void this.save(false), 1000)
+      // Checked again when it fires: a notice may have come up in the meantime (a restored draft).
+      this.autoSaveTimer = window.setTimeout(() => this.flushAutoSave(), 1000)
     }
+    if (this.dirty) {
+      window.clearTimeout(this.draftTimer)
+      this.draftTimer = window.setTimeout(() => this.writeDraft(), 2000)
+    }
+  }
+
+  /** Auto-save waits while a notice asks for a decision, and never picks a place for a file. */
+  private canAutoSave(): boolean {
+    return isDesktop && this.prefs.autoSave && Boolean(this.path) && !this.missing && !this.notice.current()
+  }
+
+  private flushAutoSave(): void {
+    if (this.dirty && this.canAutoSave()) void this.save(false)
+  }
+
+  private writeDraft(): void {
+    if (!this.dirty) return
+    bridge.saveDraft(this.path, this.currentMarkdown())
+    this.hasDraft = true
   }
 
   private setDirty(dirty: boolean): void {
@@ -377,8 +537,18 @@ export class App {
     this.titleEl.textContent = name
     this.root.classList.toggle('doc-edited', dirty)
     bridge.setTitle(name, dirty, this.path)
-    bridge.setDirty(dirty)
+    if (!dirty) {
+      window.clearTimeout(this.draftTimer)
+      if (this.hasDraft) bridge.clearDraft()
+      this.hasDraft = false
+    }
+    this.syncDirtyState()
     this.syncMenu()
+  }
+
+  /** Tells the main process whether closing the window may lose text, or saves it instead. */
+  private syncDirtyState(): void {
+    bridge.setDirty(this.dirty, this.dirty && this.canAutoSave())
   }
 
   private rememberRecent(path: string): void {
@@ -555,6 +725,7 @@ export class App {
     this.prefs = { ...this.prefs, ...patch }
     savePrefs(this.prefs)
     this.applyPrefs()
+    if ('autoSave' in patch) this.syncDirtyState()
   }
 
   private applyPrefs(): void {
@@ -792,7 +963,10 @@ export class App {
     window.addEventListener('mousemove', () => this.revealFooter(), { passive: true })
     this.footer.addEventListener('mouseenter', () => window.clearTimeout(this.footerTimer))
     window.addEventListener('focus', () => this.root.classList.remove('window-blurred'))
-    window.addEventListener('blur', () => this.root.classList.add('window-blurred'))
+    window.addEventListener('blur', () => {
+      this.root.classList.add('window-blurred')
+      this.flushAutoSave()
+    })
 
     this.bindSidebarResizer()
   }

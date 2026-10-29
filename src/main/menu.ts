@@ -136,6 +136,7 @@ export function buildMenu(menuActions: MenuActions, themes: Array<Pick<CustomThe
         c('保存', 'save', 'CmdOrCtrl+S'),
         c('另存为…', 'save-as', 'CmdOrCtrl+Shift+S'),
         c('重命名…', 'rename'),
+        c('历史版本…', 'history'),
         { type: 'separator' },
         c('在访达中显示', 'reveal-in-finder'),
         c('复制文件路径', 'copy-path'),
@@ -269,7 +270,7 @@ export function syncMenu(state: MenuState): void {
   check('toggle-typewriter', state.typewriter)
   check('toggle-statusbar', state.statusBar)
   for (const { id } of [...THEMES, ...customThemes]) check(`theme-${id}`, id === state.theme)
-  for (const id of ['rename', 'reveal-in-finder', 'copy-path']) enable(id, state.hasFile)
+  for (const id of ['rename', 'history', 'reveal-in-finder', 'copy-path']) enable(id, state.hasFile)
 }
 
 export function contextMenu(send: Send, hasSelection: boolean, inTable: boolean): Menu {
@@ -298,6 +299,7 @@ export function titleMenu(send: Send, hasFile: boolean): Menu {
   return Menu.buildFromTemplate([
     c(hasFile ? '重命名…' : '保存…', hasFile ? 'rename' : 'save'),
     c('另存为…', 'save-as'),
+    c('历史版本…', 'history', hasFile),
     { type: 'separator' },
     c('在访达中显示', 'reveal-in-finder', hasFile),
     c('复制文件路径', 'copy-path', hasFile)
