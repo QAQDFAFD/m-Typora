@@ -11,8 +11,12 @@ const ELECTRON = join(APP, 'node_modules/electron/dist/Electron.app/Contents/Mac
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-export async function launch({ port = 9240, size = '1180x800', scale } = {}) {
-  const profile = await mkdtemp(join(tmpdir(), 'm-typora-e2e-profile-'))
+/**
+ * `profile` reuses a profile directory (to relaunch after a crash); `prefs` are merged into the
+ * stored preferences before the page loads them (the window reloads once).
+ */
+export async function launch({ port = 9240, size = '1180x800', scale, profile, prefs } = {}) {
+  profile ??= await mkdtemp(join(tmpdir(), 'm-typora-e2e-profile-'))
   const args = [`--inspect=${port}`]
   if (scale) args.push(`--force-device-scale-factor=${scale}`)
   args.push(APP)
@@ -53,9 +57,18 @@ export async function launch({ port = 9240, size = '1180x800', scale } = {}) {
   }
   const page = (code) => main(`return win.webContents.executeJavaScript(${JSON.stringify(`(async () => { ${code} })()`)})`)
 
-  for (let i = 0; i < 120; i++) {
-    if (await page(`return !!document.querySelector('#write .ProseMirror')`).catch(() => false)) break
-    await sleep(150)
+  const waitForEditor = async () => {
+    for (let i = 0; i < 120; i++) {
+      if (await page(`return !!document.querySelector('#write .ProseMirror')`).catch(() => false)) break
+      await sleep(150)
+    }
+  }
+  await waitForEditor()
+  if (prefs) {
+    await page(`const key = 'm-typora:prefs'; localStorage.setItem(key, JSON.stringify({ ...JSON.parse(localStorage.getItem(key) ?? '{}'), ...${JSON.stringify(prefs)} })); return true`)
+    await main('win.webContents.reload(); return true')
+    await sleep(300)
+    await waitForEditor()
   }
 
   // Stub native UI so a test can never hang on a modal, and record what would have been shown.
@@ -80,6 +93,7 @@ export async function launch({ port = 9240, size = '1180x800', scale } = {}) {
 
   const api = {
     logs,
+    profile,
     main,
     page,
     /** Clicks at window coordinates (CSS px) with a real mouse down/up. */
@@ -208,6 +222,12 @@ export async function launch({ port = 9240, size = '1180x800', scale } = {}) {
       await main('electron.app.exit(0)').catch(() => {})
       ws.close()
       child.kill()
+    },
+    /** Ends the process without any of the app's own shutdown work, like a crash or power loss. */
+    kill: async () => {
+      ws.close()
+      child.kill('SIGKILL')
+      await new Promise((resolve) => (child.exitCode !== null || child.signalCode !== null ? resolve() : child.once('exit', resolve)))
     }
   }
   return api

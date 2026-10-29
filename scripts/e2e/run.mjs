@@ -1,7 +1,7 @@
 // m-typora end-to-end suite (see docs/test-plan.md). Run with `npm run test:e2e`.
 // Every interaction uses real mouse / keyboard events; setup opens files the way Finder does.
-import { copyFile, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
-import { existsSync, statSync } from 'node:fs'
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { existsSync, lstatSync, readdirSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { launch, sleep } from './harness.mjs'
@@ -81,7 +81,8 @@ async function hoverFooter() {
 }
 
 // ------------------------------------------------------------------- suite
-app = await launch()
+// The suite was written with auto-save off (it is on by default); section S checks the default.
+app = await launch({ prefs: { autoSave: false } })
 try {
   console.log('A. 文件与窗口')
   await test('A1', '启动为空白未命名文档', async () => {
@@ -1539,6 +1540,218 @@ try {
     }
     await app.menu('theme-github')
     if (sidebar) await app.menu('toggle-sidebar')
+  })
+  console.log('S. 数据安全 (docs/optimization-plan.md v0.2)')
+  const editorText = (target = app) => target.page(`return document.querySelector('#write .ProseMirror').textContent`)
+  const noticeKind = (target = app) => target.page(`const n = document.querySelector('#notice'); return n.hidden ? null : n.dataset.kind`)
+  const noticeText = (target = app) => target.page(`return document.querySelector('#notice').textContent.replace(/\s+/g, ' ').trim()`)
+  async function waitFor(check, ms = 4000) {
+    for (let waited = 0; waited < ms; waited += 100) {
+      if (await check()) return true
+      await sleep(100)
+    }
+    return false
+  }
+  const history = (path) => app.page(`const list = await window.mtypora.listHistory(${JSON.stringify(path)}); return Promise.all(list.map((e) => window.mtypora.readHistory(${JSON.stringify(path)}, e.id)))`)
+  const draftsIn = (profile) => (existsSync(join(profile, 'drafts')) ? readdirSync(join(profile, 'drafts')).filter((n) => n.endsWith('.json')) : [])
+
+  await test('S1', '保存不留临时文件，符号链接保持为链接', async () => {
+    const path = await openFresh('Atomic.\n')
+    await app.clickText('Atomic', 6)
+    await app.type(' write')
+    expect((await save(path)) === 'Atomic write.\n', 'not saved')
+    expect(!readdirSync(docs).some((name) => name.endsWith('.m-typora-tmp')), 'temporary file left behind')
+    const real = await fixture('Linked.\n')
+    const link = join(docs, `link-${counter}.md`)
+    await symlink(real, link)
+    await app.answer('message', 1)
+    await app.open(link)
+    await app.clickText('Linked', 6)
+    await app.type(' through')
+    await app.menu('save')
+    await sleep(200)
+    expect(lstatSync(link).isSymbolicLink(), 'the link was replaced by a file')
+    expect((await readFile(real, 'utf8')) === 'Linked through.\n', `target ${await readFile(real, 'utf8')}`)
+  })
+  await test('S2', '写入失败时原文件不变并提示', async () => {
+    const dir = join(docs, 'locked')
+    await mkdir(dir, { recursive: true })
+    const path = join(dir, 'locked.md')
+    await writeFile(path, 'Locked.\n')
+    await app.answer('message', 1)
+    await app.open(path)
+    await app.clickText('Locked', 6)
+    await app.type(' change')
+    await chmod(dir, 0o555)
+    try {
+      await app.menu('save')
+      await sleep(300)
+      expect((await readFile(path, 'utf8')) === 'Locked.\n', 'file changed')
+      const toast = await q(`document.querySelector('#toast')?.textContent ?? ''`)
+      expect(toast.startsWith('保存失败'), `toast ${toast}`)
+      expect(await edited(), 'not marked edited')
+    } finally {
+      await chmod(dir, 0o755)
+    }
+  })
+  await test('S3', '无未保存修改时，外部修改自动载入', async () => {
+    const path = await openFresh('Outside one.\n')
+    await writeFile(path, 'Outside two.\n')
+    expect(await waitFor(async () => (await editorText()).includes('Outside two')), `text ${await editorText()}`)
+    expect(!(await edited()), 'marked edited')
+    expect((await noticeKind()) === null, 'notice shown')
+  })
+  await test('S4', '有未保存修改时外部修改出现提示，可载入外部版本', async () => {
+    const path = await openFresh('Mine.\n')
+    await app.clickText('Mine', 4)
+    await app.type(' edited')
+    await writeFile(path, 'Theirs.\n')
+    expect(await waitFor(async () => (await noticeKind()) === 'conflict'), 'no conflict notice')
+    expect((await editorText()).includes('Mine edited'), 'edits replaced without asking')
+    await app.click('#notice .notice-button', '载入外部版本')
+    expect((await editorText()) === 'Theirs.', `text ${await editorText()}`)
+    expect(!(await edited()) && (await noticeKind()) === null, 'still edited or notice shown')
+  })
+  await test('S5', '保留我的版本：覆盖外部版本，外部版本进入历史', async () => {
+    const path = await openFresh('Base.\n')
+    await app.clickText('Base', 4)
+    await app.type(' mine')
+    await writeFile(path, 'External.\n')
+    expect(await waitFor(async () => (await noticeKind()) === 'conflict'), 'no conflict notice')
+    await app.click('#notice .notice-button', '保留我的版本')
+    expect((await noticeKind()) === null, 'notice still shown')
+    expect((await save(path)) === 'Base mine.\n', 'not overwritten')
+    expect((await history(path)).includes('External.\n'), 'external version not kept')
+  })
+  await test('S6', '保存前发现外部修改：不覆盖', async () => {
+    const path = await openFresh('Quick.\n')
+    await app.clickText('Quick', 5)
+    await app.type(' edit')
+    // Saved before the file watcher reports the change.
+    await writeFile(path, 'Sneaky.\n')
+    await app.menu('save')
+    expect((await readFile(path, 'utf8')) === 'Sneaky.\n', 'outside change overwritten')
+    expect((await noticeKind()) === 'conflict', `notice ${await noticeKind()}`)
+  })
+  await test('S7', '文件被删除：提示，保存时另存为原位置', async () => {
+    const path = await openFresh('Doomed.\n')
+    await rm(path)
+    expect(await waitFor(async () => (await noticeKind()) === 'deleted'), 'no deleted notice')
+    expect(await edited(), 'not marked edited')
+    await app.answer('save', null)
+    await app.menu('save')
+    const dialog = (await app.e2e()).dialogs.at(-1)
+    expect(dialog[0] === 'save' && dialog[1] === path, `dialog ${JSON.stringify(dialog)}`)
+    // Brought back unchanged: the notice goes away.
+    await writeFile(path, 'Doomed.\n')
+    expect(await waitFor(async () => (await noticeKind()) === null), 'notice still shown')
+    expect(!(await edited()), 'still edited')
+  })
+  await test('S11', '历史版本：保存前保留旧版本，可预览、恢复、撤销', async () => {
+    const path = await openFresh('Version one.\n')
+    await app.clickText('one', 3)
+    await app.type(' plus')
+    await save(path)
+    await app.clickText('plus', 4)
+    await app.type(' more')
+    expect((await save(path)) === 'Version one plus more.\n', 'second save')
+    // The second save came right after the first: only the original was kept.
+    const kept = await history(path)
+    expect(kept.length === 1 && kept[0] === 'Version one.\n', `history ${JSON.stringify(kept)}`)
+    await app.menu('history')
+    expect(await visible('#history'), 'dialog not shown')
+    expect(await waitFor(async () => (await q(`document.querySelector('.history-preview').textContent`)) === 'Version one.\n'), 'preview')
+    await app.click('#history .dialog-button', '恢复此版本')
+    expect(!(await visible('#history')), 'dialog still open')
+    expect((await editorText()) === 'Version one.', `restored ${await editorText()}`)
+    expect(await edited(), 'restore is not an edit')
+    await app.menu('undo')
+    expect((await editorText()) === 'Version one plus more.', `undo ${await editorText()}`)
+  })
+  await test('S12', '同一文件只在一个窗口中打开', async () => {
+    const path = await openFresh('Shared.\n')
+    const firstId = await app.main(`return win.id`)
+    await app.main(`electron.Menu.getApplicationMenu().items.flatMap((i) => i.submenu?.items ?? []).find((i) => i.label === '新建窗口').click(); return true`)
+    const other = `electron.BrowserWindow.getAllWindows().find((w) => w.id !== ${firstId})`
+    const inOther = (code) => app.main(`return ${other}.webContents.executeJavaScript(${JSON.stringify(`(async () => { ${code} })()`)})`)
+    try {
+      expect(await waitFor(() => inOther(`return !!document.querySelector('#write .ProseMirror')`).catch(() => false)), 'second window not ready')
+      await sleep(300)
+      expect((await inOther(`return window.mtypora.focusOpenWindow(${JSON.stringify(path)})`)) === true, 'not found in the first window')
+      await app.main(`${other}.webContents.send('open-path', ${JSON.stringify(path)}); return true`)
+      await sleep(600)
+      expect((await inOther(`return document.querySelector('#title').textContent`)) === '未命名', 'opened a second time')
+      expect((await app.main(`return electron.BrowserWindow.getAllWindows().length`)) === 2, 'window count')
+    } finally {
+      await app.main(`${other}?.destroy(); return true`)
+    }
+  })
+  await test('S13', '侧边栏随文件夹的外部变化刷新', async () => {
+    const folder = join(docs, 'watched')
+    await mkdir(folder, { recursive: true })
+    await writeFile(join(folder, 'first.md'), '# First\n')
+    await app.answer('open', folder)
+    await app.menu('open-folder')
+    await app.answer('open', null)
+    await sleep(300)
+    await writeFile(join(folder, 'fresh-note.md'), '# Fresh\n')
+    expect(await waitFor(async () => (await q(`document.querySelector('#sidebar').textContent`)).includes('fresh-note')), 'new file not listed')
+  })
+
+  // Separate app instances with their own profiles: crash recovery and the default preferences.
+  await test('S8', '崩溃后恢复未命名文档的内容', async () => {
+    const first = await launch({ port: 9241 })
+    await first.page(`document.querySelector('#write .ProseMirror').focus(); return true`)
+    await first.type('Unsaved words')
+    await sleep(2600)
+    expect(draftsIn(first.profile).length === 1, `drafts ${draftsIn(first.profile)}`)
+    await first.kill()
+    const second = await launch({ port: 9241, profile: first.profile })
+    try {
+      expect(await waitFor(async () => (await noticeKind(second)) === 'restored'), 'no restore notice')
+      expect((await editorText(second)) === 'Unsaved words', `text ${await editorText(second)}`)
+      await second.click('#notice .notice-button', '丢弃')
+      expect((await editorText(second)) === '' && (await noticeKind(second)) === null, 'not discarded')
+      expect(await waitFor(async () => draftsIn(first.profile).length === 0), 'draft left behind')
+    } finally {
+      await second.close()
+    }
+  })
+  await test('S9', '崩溃期间文件被外部修改：恢复时说明，并提供另存为副本', async () => {
+    const path = await fixture('Original.\n')
+    const first = await launch({ port: 9241, prefs: { autoSave: false } })
+    await first.open(path)
+    await first.clickText('Original', 8)
+    await first.type(' typed')
+    await sleep(2600)
+    await first.kill()
+    await writeFile(path, 'Changed meanwhile.\n')
+    const second = await launch({ port: 9241, profile: first.profile })
+    try {
+      expect(await waitFor(async () => (await noticeKind(second)) === 'restored'), 'no restore notice')
+      expect((await editorText(second)) === 'Original typed.', `text ${await editorText(second)}`)
+      const text = await noticeText(second)
+      expect(text.includes('外部修改') && text.includes('另存为副本'), `notice ${text}`)
+      // Auto-save is held back while the notice is open, so the outside change survives.
+      await sleep(1500)
+      const onDisk = await readFile(path, 'utf8')
+      expect(onDisk === 'Changed meanwhile.\n', `overwritten: ${JSON.stringify(onDisk)}`)
+    } finally {
+      await second.close()
+    }
+  })
+  await test('S10', '新用户默认开启自动保存', async () => {
+    const path = await fixture('Fresh profile.\n')
+    const fresh = await launch({ port: 9241 })
+    try {
+      await fresh.open(path)
+      await fresh.clickText('profile', 7)
+      await fresh.type(' saved')
+      expect(await waitFor(async () => (await readFile(path, 'utf8')) === 'Fresh profile saved.\n', 3000), 'not auto-saved')
+      expect(!(await fresh.page(`return document.documentElement.classList.contains('doc-edited')`)), 'still marked edited')
+    } finally {
+      await fresh.close()
+    }
   })
 } finally {
   const errors = app.logs

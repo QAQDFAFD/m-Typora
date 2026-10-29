@@ -156,6 +156,13 @@ export class WysiwygEditor {
     view.focus()
   }
 
+  /** Puts the caret as close as possible to `pos`, e.g. after the document was reloaded. */
+  setCursor(pos: number): void {
+    const view = this.view()
+    const $pos = view.state.doc.resolve(Math.max(0, Math.min(pos, view.state.doc.content.size)))
+    view.dispatch(view.state.tr.setSelection(Selection.near($pos)))
+  }
+
   focusStart(): void {
     const view = this.view()
     view.dispatch(view.state.tr.setSelection(Selection.atStart(view.state.doc)))

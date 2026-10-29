@@ -15,6 +15,34 @@ export interface TreeNode {
   excerpt?: string[]
 }
 
+/** The result of a save: the path written, a refusal because the file changed on disk, or a cancelled dialog. */
+export type SaveResult = { path: string } | { conflict: true } | null
+
+export interface SaveOptions {
+  /** Overwrite even though the file changed on disk since this window read it. */
+  force?: boolean
+  /** Where the save dialog starts when `path` is null. */
+  suggestedPath?: string
+}
+
+/** What happened to the open document on disk, as seen by the main process. */
+export type ExternalChange = 'modified' | 'deleted' | 'restored'
+
+/** Unsaved text recovered after a crash. */
+export interface DraftRestore {
+  path: string | null
+  content: string
+  /** The file was changed by something else after these edits started. */
+  diskChanged: boolean
+}
+
+export interface HistoryEntry {
+  /** Snapshot time in ms; also its id. */
+  id: string
+  time: number
+  size: number
+}
+
 export interface SearchHit {
   path: string
   line: number
@@ -92,6 +120,7 @@ export type MenuCommand =
   | 'save'
   | 'save-as'
   | 'save-and-close'
+  | 'history'
   | 'rename'
   | 'reveal-in-finder'
   | 'copy-path'
@@ -199,7 +228,7 @@ export interface MTyporaApi {
   readFile(path: string): Promise<OpenedFile>
   readFolder(root: string): Promise<TreeNode[]>
   searchFolder(root: string, query: string): Promise<SearchHit[]>
-  saveFile(path: string | null, content: string): Promise<string | null>
+  saveFile(path: string | null, content: string, options?: SaveOptions): Promise<SaveResult>
   renameFile(path: string, newName: string): Promise<string>
   /** Copies a pasted/dropped image next to the document and returns its relative path. */
   saveAsset(docPath: string, fileName: string, data: ArrayBuffer): Promise<string>
@@ -222,6 +251,18 @@ export interface MTyporaApi {
   syncMenu(state: MenuState): void
   onMenu(handler: (command: MenuCommand) => void): void
   onOpenPath(handler: (path: string) => void): void
-  setDirty(dirty: boolean): void
+  /** `autoSaveOnClose`: closing the window saves instead of asking. */
+  setDirty(dirty: boolean, autoSaveOnClose: boolean): void
   closeWindow(): void
+  /** Focuses another window that already shows `path`; false when there is none. */
+  focusOpenWindow(path: string): Promise<boolean>
+  onFileChanged(handler: (path: string, change: ExternalChange) => void): void
+  watchFolder(root: string | null): void
+  onFolderChanged(handler: () => void): void
+  saveDraft(path: string | null, content: string): void
+  clearDraft(): void
+  onDraftRestore(handler: (draft: DraftRestore) => void): void
+  listHistory(path: string): Promise<HistoryEntry[]>
+  readHistory(path: string, id: string): Promise<string>
+  revealHistory(path: string, id: string): void
 }

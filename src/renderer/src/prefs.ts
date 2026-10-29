@@ -59,7 +59,7 @@ const DEFAULTS: Prefs = {
   zoom: 1,
   fontSize: 16,
   lineWidth: 'default',
-  autoSave: false,
+  autoSave: true,
   autoPair: true,
   lastFolder: null,
   recentFiles: [],

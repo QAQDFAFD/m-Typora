@@ -47,7 +47,7 @@ function createWebBridge(): MTyporaApi {
     saveFile: async (path, content) => {
       const name = path?.split('/').pop() || '未命名.md'
       download(name, content, 'text/markdown')
-      return name
+      return { path: name }
     },
     renameFile: async (_path, newName) => newName,
     saveAsset: async () => {
@@ -79,6 +79,16 @@ function createWebBridge(): MTyporaApi {
     },
     setDirty: () => {},
     closeWindow: () => window.close(),
+    focusOpenWindow: async () => false,
+    onFileChanged: () => {},
+    watchFolder: () => {},
+    onFolderChanged: () => {},
+    saveDraft: () => {},
+    clearDraft: () => {},
+    onDraftRestore: () => {},
+    listHistory: async () => [],
+    readHistory: async () => '',
+    revealHistory: () => {},
     onMenu: (handler: (command: MenuCommand) => void) => {
       window.addEventListener('mtypora-menu', (event) => handler((event as CustomEvent<MenuCommand>).detail))
     },
