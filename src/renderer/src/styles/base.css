@@ -586,7 +586,8 @@ svg {
 
 /* Switched-on toggles keep a gray background, the same one as the active file in the sidebar. */
 .source-mode #toggle-mode,
-.sidebar-open #toggle-sidebar {
+.sidebar-open #toggle-sidebar,
+.always-on-top #toggle-always-on-top {
   color: var(--text-color);
   background: var(--active-file-bg-color);
 }

@@ -190,6 +190,8 @@ function createWindow(options: { path?: string; draftId?: string; draft?: Draft 
   })
 
   win.webContents.on('did-finish-load', () => {
+    // A page reloaded after a crash starts unpinned; the window itself still is.
+    if (win.isAlwaysOnTop()) win.webContents.send('window:always-on-top', true)
     if (state.restore) void restoreDraft(win, state)
     const path = state.path ?? SMOKE_FILE
     state.path = undefined
@@ -427,6 +429,12 @@ function registerIpc(): void {
     else dirtyWindows.delete(win)
     if (autoSaveOnClose) autoSaveWindows.add(win)
     else autoSaveWindows.delete(win)
+  })
+
+  ipcMain.on('window:set-always-on-top', (event, on: boolean) => {
+    const win = senderWindow(event)
+    win.setAlwaysOnTop(on)
+    win.webContents.send('window:always-on-top', win.isAlwaysOnTop())
   })
 
   ipcMain.on('window:close', (event) => {

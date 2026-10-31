@@ -196,6 +196,7 @@ export type MenuCommand =
   | 'toggle-focus'
   | 'toggle-typewriter'
   | 'toggle-statusbar'
+  | 'toggle-always-on-top'
   | 'zoom-in'
   | 'zoom-out'
   | 'zoom-reset'
@@ -213,6 +214,8 @@ export interface MenuState {
   focus: boolean
   typewriter: boolean
   statusBar: boolean
+  /** This window floats above other apps' windows (per window, not saved). */
+  alwaysOnTop: boolean
   theme: ThemeId
   hasFile: boolean
   /** The theme's page color, so the native window never flashes another color. */
@@ -254,6 +257,9 @@ export interface MTyporaApi {
   /** `autoSaveOnClose`: closing the window saves instead of asking. */
   setDirty(dirty: boolean, autoSaveOnClose: boolean): void
   closeWindow(): void
+  /** Keeps this window above other apps' windows, like a sticky note; the answer comes back through `onAlwaysOnTop`. */
+  setAlwaysOnTop(on: boolean): void
+  onAlwaysOnTop(handler: (on: boolean) => void): void
   /** Focuses another window that already shows `path`; false when there is none. */
   focusOpenWindow(path: string): Promise<boolean>
   onFileChanged(handler: (path: string, change: ExternalChange) => void): void

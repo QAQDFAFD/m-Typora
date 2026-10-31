@@ -79,6 +79,8 @@ function createWebBridge(): MTyporaApi {
     },
     setDirty: () => {},
     closeWindow: () => window.close(),
+    setAlwaysOnTop: () => {},
+    onAlwaysOnTop: () => {},
     focusOpenWindow: async () => false,
     onFileChanged: () => {},
     watchFolder: () => {},

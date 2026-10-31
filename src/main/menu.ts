@@ -202,12 +202,7 @@ export function buildMenu(menuActions: MenuActions, themes: Array<Pick<CustomThe
         checkItem(send, '显示状态栏', 'toggle-statusbar'),
         { type: 'separator' },
         { role: 'togglefullscreen', label: '切换全屏', accelerator: isMac ? 'Ctrl+Cmd+F' : 'F11' },
-        {
-          label: '保持窗口在最前端',
-          type: 'checkbox',
-          id: 'always-on-top',
-          click: (item, win) => (win as BrowserWindow | undefined)?.setAlwaysOnTop(item.checked)
-        },
+        checkItem(send, '保持窗口在最前端', 'toggle-always-on-top', ctrlCmd('T')),
         { type: 'separator' },
         c('实际大小', 'zoom-reset', 'CmdOrCtrl+Shift+0'),
         c('放大', 'zoom-in', 'CmdOrCtrl+Shift+='),
@@ -269,6 +264,7 @@ export function syncMenu(state: MenuState): void {
   check('toggle-focus', state.focus)
   check('toggle-typewriter', state.typewriter)
   check('toggle-statusbar', state.statusBar)
+  check('toggle-always-on-top', state.alwaysOnTop)
   for (const { id } of [...THEMES, ...customThemes]) check(`theme-${id}`, id === state.theme)
   for (const id of ['rename', 'history', 'reveal-in-finder', 'copy-path']) enable(id, state.hasFile)
 }

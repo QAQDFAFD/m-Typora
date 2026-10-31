@@ -35,6 +35,8 @@ export class App {
   /** A crash-recovery draft of this window exists in the main process. */
   private hasDraft = false
   private mode: Mode = 'wysiwyg'
+  /** Mirrors the main process: this window stays above other apps' windows. */
+  private alwaysOnTop = false
   private prefs: Prefs = loadPrefs()
   private customThemes: CustomTheme[] = []
   private customThemeStyle: HTMLStyleElement | null = null
@@ -135,6 +137,7 @@ export class App {
     bridge.onFileChanged(whenStarted((path, change) => this.onExternalChange(path, change)))
     bridge.onFolderChanged(whenStarted(() => this.refreshFolder()))
     bridge.onDraftRestore(whenStarted((draft) => this.restoreDraft(draft)))
+    bridge.onAlwaysOnTop(whenStarted((on) => this.showAlwaysOnTop(on)))
 
     this.root.dataset.platform = bridge.platform
     if (!isMacLike()) localizeShortcutHints(document.body)
@@ -269,6 +272,8 @@ export class App {
         return this.updatePrefs({ typewriter: !this.prefs.typewriter })
       case 'toggle-statusbar':
         return this.updatePrefs({ statusBar: !this.prefs.statusBar })
+      case 'toggle-always-on-top':
+        return bridge.setAlwaysOnTop(!this.alwaysOnTop)
       case 'zoom-in':
         return this.updatePrefs({ zoom: Math.min(2, round(this.prefs.zoom + 0.1)) })
       case 'zoom-out':
@@ -766,6 +771,12 @@ export class App {
     return getComputedStyle(this.root).colorScheme.includes('dark')
   }
 
+  private showAlwaysOnTop(on: boolean): void {
+    this.alwaysOnTop = on
+    this.root.classList.toggle('always-on-top', on)
+    this.syncMenu()
+  }
+
   private syncMenu(): void {
     bridge.syncMenu({
       source: this.mode === 'source',
@@ -774,6 +785,7 @@ export class App {
       focus: this.prefs.focus,
       typewriter: this.prefs.typewriter,
       statusBar: this.prefs.statusBar,
+      alwaysOnTop: this.alwaysOnTop,
       theme: this.prefs.theme,
       hasFile: this.path !== null,
       background: getComputedStyle(document.body).backgroundColor,
@@ -926,6 +938,9 @@ export class App {
     this.scroller.addEventListener('scroll', () => this.updateActiveHeading(), { passive: true })
     $('#toggle-sidebar').addEventListener('click', () => this.run('toggle-sidebar'))
     $('#toggle-mode').addEventListener('click', () => this.run('toggle-source'))
+    // A browser tab cannot float above other windows.
+    $('#toggle-always-on-top').hidden = !isDesktop
+    $('#toggle-always-on-top').addEventListener('click', () => this.run('toggle-always-on-top'))
     $('#title-menu').addEventListener('click', () => bridge.showTitleMenu(this.path !== null))
 
     this.wordCountButton.addEventListener('click', (event) => {
@@ -1089,6 +1104,9 @@ function isMacLike(): boolean {
 function localizeShortcutHints(root: HTMLElement): void {
   const symbols: Record<string, string> = { '⌃': 'Ctrl+', '⌥': 'Alt+', '⇧': 'Shift+', '⌘': 'Ctrl+' }
   root.querySelectorAll<HTMLElement>('[title]').forEach((el) => {
-    el.title = el.title.replace(/[⌃⌥⇧⌘]+/g, (keys) => [...new Set([...keys].map((k) => symbols[k]))].join(''))
+    // ⌃⌘ is Ctrl+Shift there (see ctrlCmd in main/menu.ts).
+    el.title = el.title.replace(/[⌃⌥⇧⌘]+/g, (keys) =>
+      [...new Set([...(keys.includes('⌃') && keys.includes('⌘') ? keys.replace('⌃', '⇧') : keys)].map((k) => symbols[k]))].join('')
+    )
   })
 }
