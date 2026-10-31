@@ -1,8 +1,11 @@
 name: Desktop build
 
-# Every merge or push to main builds the macOS and Windows clients and replaces the
-# "latest-main" pre-release with them. Pull requests into main are built too (as
-# downloadable workflow artifacts) so packaging problems show up before merging.
+# Every merge or push to main is released as a new version: the patch number of the last
+# v* tag goes up by one (v0.2.0 → v0.2.1), and the macOS and Windows clients are published
+# as a GitHub Release under that tag. To start a new minor or major version, raise "version"
+# in package.json (e.g. to 0.3.0); the next release uses it as is.
+# Pull requests into main are built too (as downloadable workflow artifacts) so packaging
+# problems show up before merging.
 on:
   push:
     branches: [main]
@@ -15,12 +18,49 @@ permissions:
 
 concurrency:
   group: desktop-build-${{ github.ref }}
-  # Superseded PR builds are cancelled; main builds queue so releases never race.
+  # Superseded PR builds are cancelled; main builds queue so two releases never pick the same number.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  version:
+    name: Pick the version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.pick.outputs.version }}
+      release: ${{ steps.pick.outputs.release }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - id: pick
+        env:
+          RELEASE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: |
+          base=$(node -p "require('./package.json').version")
+          if [ "$RELEASE" != "true" ]; then
+            # Pull request and manual builds keep package.json's version and publish nothing.
+            echo "version=$base" >> "$GITHUB_OUTPUT"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          last=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)
+          last=${last#v}
+          newest=$(printf '%s\n%s\n' "$base" "$last" | sort -V | tail -n 1)
+          if [ -z "$last" ] || { [ "$newest" = "$base" ] && [ "$base" != "$last" ]; }; then
+            # No release yet, or package.json was raised past the last release.
+            next=$base
+          else
+            IFS=. read -r major minor patch <<< "$last"
+            next="$major.$minor.$((patch + 1))"
+          fi
+          echo "Last release: ${last:-none}; package.json: $base; releasing v$next"
+          echo "version=$next" >> "$GITHUB_OUTPUT"
+          echo "release=true" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build (${{ matrix.name }})
+    needs: version
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -43,6 +83,11 @@ jobs:
 
       - run: npm ci
 
+      # The version ends up in the installer names and in 关于 m-typora.
+      - name: Set the version
+        shell: bash
+        run: npm version "${{ needs.version.outputs.version }}" --no-git-tag-version --allow-same-version
+
       - run: npm run typecheck
 
       - name: Package
@@ -63,9 +108,9 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: Publish latest main build
-    needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    name: Publish v${{ needs.version.outputs.version }}
+    needs: [version, build]
+    if: needs.version.outputs.release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -75,19 +120,18 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Replace the latest-main pre-release
+      - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          TAG: v${{ needs.version.outputs.version }}
         run: |
           link() {
             local file
             file=$(cd dist && ls $1)
-            echo "[$file](https://github.com/$GH_REPO/releases/download/latest-main/$file)"
+            echo "[$file](https://github.com/$GH_REPO/releases/download/$TAG/$file)"
           }
           cat > notes.md <<EOF
-          main 分支 ${GITHUB_SHA::7} 的自动构建；每次合并或推送到 main 都会用新版本替换这里的文件。
-
           | 系统 | 下载 |
           | --- | --- |
           | macOS（Apple 芯片） | $(link '*mac-arm64.dmg') |
@@ -98,10 +142,14 @@ jobs:
 
           - **macOS**：先打开一次，被拦截后到「系统设置 › 隐私与安全性」点「仍要打开」；或在终端运行 \`xattr -dr com.apple.quarantine /Applications/m-typora.app\`。
           - **Windows**：SmartScreen 提示时点「更多信息 › 仍要运行」。
+
           EOF
-          gh release delete latest-main --yes --cleanup-tag || true
-          gh release create latest-main dist/* \
-            --prerelease \
+          # The changes since the previous release (merged pull requests) follow the table.
+          gh release create "$TAG" dist/* \
             --target "$GITHUB_SHA" \
-            --title "m-typora 最新构建（main）" \
-            --notes-file notes.md
+            --title "m-typora $TAG" \
+            --notes-file notes.md \
+            --generate-notes \
+            --latest
+          # Builds used to replace a single "latest-main" pre-release; numbered releases supersede it.
+          gh release delete latest-main --yes --cleanup-tag || true
