@@ -6,7 +6,7 @@
 
 ## 下载
 
-每次合并或推送到 `main`，GitHub Actions 都会自动打包 macOS 和 Windows 客户端，并更新预发布版本 [latest-main](https://github.com/QAQDFAFD/m-Typora/releases/tag/latest-main)：
+在 [Releases](https://github.com/QAQDFAFD/m-Typora/releases) 下载，[最新版本](https://github.com/QAQDFAFD/m-Typora/releases/latest)总在最前面。每次合并或推送到 `main`，GitHub Actions 都会自动打包 macOS 和 Windows 客户端，并发布一个新版本：版本号的最后一位在上一个版本的基础上加一（`v0.2.0` → `v0.2.1`），说明里附有这次包含的改动。要开始新的次版本或主版本，把 `package.json` 的 `version` 改成新的号码（如 `0.3.0`），下一次发布就会使用它。
 
 | 系统 | 安装包 |
 | --- | --- |
