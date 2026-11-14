@@ -1753,6 +1753,63 @@ try {
       await fresh.close()
     }
   })
+
+  console.log('T. 保持窗口在最前端')
+  const onTop = () => app.main(`return win.isAlwaysOnTop()`)
+  const unpin = async () => {
+    if (await onTop()) await app.menu('toggle-always-on-top')
+  }
+  await test('T1', '状态栏按钮与菜单切换置顶', async () => {
+    await openFresh('Sticky.\n')
+    try {
+      await hoverFooter()
+      expect(!(await toggleGray('toggle-always-on-top')), 'gray while off')
+      await app.click('#toggle-always-on-top')
+      await hoverFooter()
+      expect(await onTop(), 'window not on top')
+      expect(await app.menuChecked('toggle-always-on-top'), 'menu not checked')
+      expect(await toggleGray('toggle-always-on-top'), 'button not gray')
+      await app.clickMenuItem('toggle-always-on-top')
+      await hoverFooter()
+      expect(!(await onTop()), 'still on top')
+      expect(!(await app.menuChecked('toggle-always-on-top')), 'menu still checked')
+      expect(!(await toggleGray('toggle-always-on-top')), 'still gray')
+    } finally {
+      await unpin()
+    }
+  })
+  await test('T2', '菜单勾选跟随当前窗口', async () => {
+    await app.menu('toggle-always-on-top')
+    const firstId = await app.main(`return win.id`)
+    await app.main(`electron.Menu.getApplicationMenu().items.flatMap((i) => i.submenu?.items ?? []).find((i) => i.label === '新建窗口').click(); return true`)
+    // With two windows open, the harness's `win` may be either one: name both by id.
+    const first = `electron.BrowserWindow.fromId(${firstId})`
+    const other = `electron.BrowserWindow.getAllWindows().find((w) => w.id !== ${firstId})`
+    try {
+      expect(await waitFor(() => app.main(`return ${other}.webContents.executeJavaScript("!!document.querySelector('#write .ProseMirror')")`).catch(() => false)), 'second window not ready')
+      await sleep(300)
+      // The windows never take focus from the user during the suite: deliver the focus event directly.
+      await app.main(`${other}.emit('focus'); return true`)
+      expect(!(await app.main(`return ${other}.isAlwaysOnTop()`)), 'new window on top')
+      expect(!(await app.menuChecked('toggle-always-on-top')), 'checked for the new window')
+      await app.main(`${first}.emit('focus'); return true`)
+      expect(await app.menuChecked('toggle-always-on-top'), 'not checked again for the first window')
+    } finally {
+      await app.main(`${other}?.destroy(); return true`)
+      await unpin()
+    }
+  })
+  await test('T3', '渲染进程崩溃后仍显示已置顶', async () => {
+    await app.menu('toggle-always-on-top')
+    try {
+      await app.main(`win.webContents.forcefullyCrashRenderer(); return true`)
+      const shown = () => q(`!!document.querySelector('#write .ProseMirror') && document.documentElement.classList.contains('always-on-top')`).catch(() => false)
+      expect(await waitFor(shown, 8000), 'not shown as pinned after the reload')
+      expect(await app.menuChecked('toggle-always-on-top'), 'menu not checked after the reload')
+    } finally {
+      await unpin()
+    }
+  })
 } finally {
   const errors = app.logs
     .join('')

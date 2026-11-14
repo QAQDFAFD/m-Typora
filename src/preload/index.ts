@@ -27,6 +27,10 @@ const api: MTyporaApi = {
   setTitle: (title, edited, path) => ipcRenderer.send('window:set-title', title, edited, path),
   setDirty: (dirty, autoSaveOnClose) => ipcRenderer.send('window:set-dirty', dirty, autoSaveOnClose),
   closeWindow: () => ipcRenderer.send('window:close'),
+  setAlwaysOnTop: (on) => ipcRenderer.send('window:set-always-on-top', on),
+  onAlwaysOnTop: (handler) => {
+    ipcRenderer.on('window:always-on-top', (_event, on: boolean) => handler(on))
+  },
   focusOpenWindow: (path) => ipcRenderer.invoke('window:focus-open', path),
   onFileChanged: (handler) => {
     ipcRenderer.on('doc:changed', (_event, path: string, change: ExternalChange) => handler(path, change))
