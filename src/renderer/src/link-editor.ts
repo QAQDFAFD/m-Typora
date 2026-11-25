@@ -48,6 +48,7 @@ class LinkEditorView implements PluginView {
   private box: HTMLElement
   private input: HTMLInputElement
   private range: { from: number; to: number } | null = null
+  private attrs: Record<string, unknown> = {}
 
   constructor(private view: EditorView) {
     this.box = document.createElement('div')
@@ -60,6 +61,7 @@ class LinkEditorView implements PluginView {
     view.dom.parentElement?.append(this.box)
 
     this.input.addEventListener('keydown', (event) => {
+      if (event.isComposing || event.keyCode === 229) return
       if (event.key === 'Enter') {
         event.preventDefault()
         this.commit()
@@ -83,6 +85,7 @@ class LinkEditorView implements PluginView {
       return
     }
     this.range = { from: link.from, to: link.to }
+    this.attrs = { ...link.mark.attrs }
     if (this.box.hidden) {
       this.input.value = String(link.mark.attrs.href ?? '')
       this.box.hidden = false
@@ -101,17 +104,20 @@ class LinkEditorView implements PluginView {
 
   private onHover = (event: MouseEvent): void => {
     const anchor = (event.target as HTMLElement).closest?.('a')
-    if (anchor && !anchor.dataset.hint) {
-      const href = anchor.getAttribute('href') ?? ''
-      anchor.title = `${href}\n${isMac ? '⌘' : 'Ctrl'} + 单击打开链接`
-      anchor.dataset.hint = '1'
-    }
+    if (!anchor) return
+    const href = anchor.getAttribute('href') ?? ''
+    if (anchor.dataset.hintHref === href) return
+    if (anchor.dataset.origTitle === undefined) anchor.dataset.origTitle = anchor.getAttribute('title') ?? ''
+    const orig = anchor.dataset.origTitle
+    const hint = `${href}\n${isMac ? '⌘' : 'Ctrl'} + 单击打开链接`
+    anchor.title = orig ? `${orig}\n${hint}` : hint
+    anchor.dataset.hintHref = href
   }
 
   private place(pos: number): void {
     const host = this.box.parentElement
     if (!host) return
-    const zoom = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--zoom')) || 1
+    const zoom = Number.parseFloat(document.documentElement.style.getPropertyValue('--zoom')) || 1
     const coords = this.view.coordsAtPos(pos)
     const hostRect = host.getBoundingClientRect()
     this.box.style.left = `${(coords.left - hostRect.left) / zoom}px`
@@ -124,7 +130,7 @@ class LinkEditorView implements PluginView {
     if (!range || !type) return this.close(false)
     const href = this.input.value.trim()
     const tr = this.view.state.tr.removeMark(range.from, range.to, type)
-    if (href) tr.addMark(range.from, range.to, type.create({ href }))
+    if (href) tr.addMark(range.from, range.to, type.create({ ...this.attrs, href }))
     tr.setSelection(TextSelection.create(tr.doc, range.to)).setMeta(key, false)
     this.box.hidden = true
     this.view.dispatch(tr)

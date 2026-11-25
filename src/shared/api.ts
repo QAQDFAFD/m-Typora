@@ -111,6 +111,13 @@ export interface PdfExportOptions extends ExportOptions {
 
 export type SidebarView = 'articles' | 'tree' | 'outline' | 'search'
 
+export interface SidebarMenuTarget {
+  kind: 'file' | 'folder' | 'root'
+  path: string
+}
+
+export type SidebarAction = 'new-file' | 'new-folder' | 'rename' | 'trash' | 'reveal' | 'copy-path'
+
 export type MenuCommand =
   // File
   | 'new'
@@ -230,10 +237,13 @@ export interface MTyporaApi {
   openFolderDialog(): Promise<{ root: string; tree: TreeNode[] } | null>
   readFile(path: string): Promise<OpenedFile>
   createFile(folder: string): Promise<OpenedFile>
+  createFolder(folder: string): Promise<string>
   readFolder(root: string): Promise<TreeNode[]>
   searchFolder(root: string, query: string): Promise<SearchHit[]>
   saveFile(path: string | null, content: string, options?: SaveOptions): Promise<SaveResult>
   renameFile(path: string, newName: string): Promise<string>
+  trashPath(path: string): Promise<void>
+  filterExistingFiles(paths: string[]): Promise<string[]>
   /** Copies a pasted/dropped image next to the document and returns its relative path. */
   saveAsset(docPath: string, fileName: string, data: ArrayBuffer): Promise<string>
   /** Uploads images with PicGo or a custom command; resolves to one URL per image. */
@@ -252,6 +262,9 @@ export interface MTyporaApi {
   confirmDiscard(name: string): Promise<'save' | 'discard' | 'cancel'>
   showContextMenu(hasSelection: boolean, inTable: boolean): void
   showTitleMenu(hasFile: boolean): void
+  showSidebarMenu(target: SidebarMenuTarget): void
+  onSidebarAction(handler: (action: SidebarAction, target: SidebarMenuTarget) => void): void
+  setSpellcheck(enabled: boolean): void
   syncMenu(state: MenuState): void
   onMenu(handler: (command: MenuCommand) => void): void
   onOpenPath(handler: (path: string) => void): void

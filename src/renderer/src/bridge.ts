@@ -43,6 +43,7 @@ function createWebBridge(): MTyporaApi {
       throw new Error(`Cannot read ${path} in browser mode`)
     },
     createFile: async () => ({ path: '未命名.md', content: '' }),
+    createFolder: async () => '未命名文件夹',
     readFolder: async () => [],
     searchFolder: async () => [],
     saveFile: async (path, content) => {
@@ -51,6 +52,8 @@ function createWebBridge(): MTyporaApi {
       return { path: name }
     },
     renameFile: async (_path, newName) => newName,
+    trashPath: async () => {},
+    filterExistingFiles: async (paths) => paths,
     saveAsset: async () => {
       throw new Error('Assets are not supported in browser mode')
     },
@@ -74,6 +77,9 @@ function createWebBridge(): MTyporaApi {
     confirmDiscard: async (name) => (confirm(`放弃对“${name}”的修改？`) ? 'discard' : 'cancel'),
     showContextMenu: () => {},
     showTitleMenu: () => {},
+    showSidebarMenu: () => {},
+    onSidebarAction: () => {},
+    setSpellcheck: () => {},
     syncMenu: () => {},
     setTitle: (title) => {
       document.title = title

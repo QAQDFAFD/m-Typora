@@ -1,5 +1,5 @@
 import { app, BrowserWindow, Menu, shell, type MenuItemConstructorOptions } from 'electron'
-import { THEMES, type CustomTheme, type MenuCommand, type MenuState } from '../shared/api'
+import { THEMES, type CustomTheme, type MenuCommand, type MenuState, type SidebarAction, type SidebarMenuTarget } from '../shared/api'
 
 type Send = (command: MenuCommand, win?: BrowserWindow) => void
 
@@ -299,6 +299,30 @@ export function titleMenu(send: Send, hasFile: boolean): Menu {
     { type: 'separator' },
     c('在访达中显示', 'reveal-in-finder', hasFile),
     c('复制文件路径', 'copy-path', hasFile)
+  ])
+}
+
+export function sidebarMenu(target: SidebarMenuTarget, run: (action: SidebarAction) => void): Menu {
+  const revealLabel = isMac ? '在访达中显示' : '在文件夹中显示'
+  const trashLabel = isMac ? '移到废纸篓' : '移到回收站'
+  const item = (label: string, action: SidebarAction): MenuItemConstructorOptions => ({ label, click: () => run(action) })
+  if (target.kind === 'root') {
+    return Menu.buildFromTemplate([
+      item('新建文件', 'new-file'),
+      item('新建文件夹', 'new-folder'),
+      { type: 'separator' },
+      item(revealLabel, 'reveal')
+    ])
+  }
+  return Menu.buildFromTemplate([
+    item('新建文件', 'new-file'),
+    item('新建文件夹', 'new-folder'),
+    { type: 'separator' },
+    item('重命名', 'rename'),
+    item(trashLabel, 'trash'),
+    { type: 'separator' },
+    item(revealLabel, 'reveal'),
+    item('复制路径', 'copy-path')
   ])
 }
 

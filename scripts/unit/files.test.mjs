@@ -3,15 +3,19 @@ import { mkdir, mkdtemp, rm, symlink, utimes, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { clearTreeCache, createUntitledFile, readTree, searchFolder } from '../../src/main/files.ts'
+import { clearTreeCache, createUntitledFile, createUntitledFolder, readTree, searchFolder } from '../../src/main/files.ts'
 
-test('readTree ignores hidden/ignored dirs, skips broken symlinks, and sorts numerically', async () => {
+test('readTree shows empty dirs, hides non-markdown/ignored dirs, skips broken symlinks, and sorts numerically', async () => {
   clearTreeCache()
   const dir = await mkdtemp(join(tmpdir(), 'm-typora-files-'))
   try {
     await mkdir(join(dir, 'node_modules', 'pkg'), { recursive: true })
     await mkdir(join(dir, '.git'), { recursive: true })
     await mkdir(join(dir, 'empty-dir'), { recursive: true })
+    await mkdir(join(dir, 'hidden-only'), { recursive: true })
+    await writeFile(join(dir, 'hidden-only', '.DS_Store'), '')
+    await mkdir(join(dir, 'assets-only'), { recursive: true })
+    await writeFile(join(dir, 'assets-only', 'logo.png'), 'png')
     await mkdir(join(dir, 'notes'), { recursive: true })
     await writeFile(join(dir, 'node_modules', 'pkg', 'ignored.md'), '# Ignored\n')
     await writeFile(join(dir, '.git', 'hidden.md'), '# Hidden\n')
@@ -23,9 +27,11 @@ test('readTree ignores hidden/ignored dirs, skips broken symlinks, and sorts num
     const tree = await readTree(dir)
     assert.deepEqual(
       tree.map((node) => node.name),
-      ['notes', '2.md', '10.md']
+      ['empty-dir', 'hidden-only', 'notes', '2.md', '10.md']
     )
-    assert.deepEqual(tree[1].excerpt, ['Two', 'Second line.'])
+    assert.deepEqual(tree[0].children, [])
+    assert.deepEqual(tree[1].children, [])
+    assert.deepEqual(tree[3].excerpt, ['Two', 'Second line.'])
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -94,6 +100,23 @@ test('createUntitledFile generates sequential and collision-free filenames', asy
     assert.equal(third, join(dir, '未命名 3.md'))
 
     const parallel = await Promise.all([createUntitledFile(dir), createUntitledFile(dir), createUntitledFile(dir)])
+    assert.equal(new Set(parallel).size, 3)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('createUntitledFolder generates sequential and collision-free folder names', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'm-typora-newfolder-'))
+  try {
+    const first = await createUntitledFolder(dir)
+    const second = await createUntitledFolder(dir)
+    const third = await createUntitledFolder(dir)
+    assert.equal(first, join(dir, '未命名文件夹'))
+    assert.equal(second, join(dir, '未命名文件夹 2'))
+    assert.equal(third, join(dir, '未命名文件夹 3'))
+
+    const parallel = await Promise.all([createUntitledFolder(dir), createUntitledFolder(dir), createUntitledFolder(dir)])
     assert.equal(new Set(parallel).size, 3)
   } finally {
     await rm(dir, { recursive: true, force: true })

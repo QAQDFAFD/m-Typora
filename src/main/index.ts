@@ -1,19 +1,19 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen, session, shell } from 'electron'
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { existsSync, statSync } from 'node:fs'
-import { basename, dirname, extname, join, resolve } from 'node:path'
+import { basename, dirname, extname, join, resolve, sep } from 'node:path'
 import { hashText, resolveTarget, withPathLock, writeFileAtomic } from './atomic'
 import { deleteDraft, leftoverDrafts, readDraft, writeDraft, type Draft } from './drafts'
-import { buildMenu, contextMenu, setCustomThemes, syncMenu, titleMenu } from './menu'
-import { createUntitledFile, readTree, searchFolder } from './files'
+import { buildMenu, contextMenu, setCustomThemes, sidebarMenu, syncMenu, titleMenu } from './menu'
+import { createUntitledFile, createUntitledFolder, readTree, searchFolder } from './files'
 import { exportHtml, exportPdf } from './export'
 import { historyFile, listHistory, moveHistory, pruneHistory, readHistory, snapshot } from './history'
 import { uploadImages } from './images'
 import { ensureThemesDir, listCustomThemes } from './themes'
 import { DocumentTracker } from './tracker'
 import { fitWindowBounds, loadSessionState, saveSessionState, saveSessionStateSync, type SessionState } from './window-state'
-import type { HtmlExportOptions, MenuCommand, MenuState, PdfExportOptions, SaveOptions, SaveResult, UploadConfig, UploadFile } from '../shared/api'
+import type { HtmlExportOptions, MenuCommand, MenuState, PdfExportOptions, SaveOptions, SaveResult, SidebarMenuTarget, UploadConfig, UploadFile } from '../shared/api'
 
 const MARKDOWN_FILTERS = [
   { name: 'Markdown', extensions: ['md', 'markdown', 'mdown', 'txt'] },
@@ -144,7 +144,7 @@ function createWindow(options: { path?: string; draftId?: string; draft?: Draft 
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      spellcheck: false,
+      spellcheck: true,
       // Tests keep running at full speed while the user works in other windows.
       backgroundThrottling: !E2E
     }
@@ -365,6 +365,8 @@ function registerIpc(): void {
     return { path, content: '' }
   })
 
+  ipcMain.handle('fs:create-folder', (_event, folder: string) => createUntitledFolder(folder))
+
   ipcMain.handle('fs:read-folder', (_event, root: string) => readTree(root))
 
   ipcMain.handle('fs:search', (_event, root: string, query: string) => searchFolder(root, query))
@@ -398,18 +400,50 @@ function registerIpc(): void {
     })
   })
 
-  ipcMain.handle('fs:rename', async (event, path: string, newName: string) => {
-    const name = basename(newName.trim())
-    if (!name) throw new Error('文件名不能为空')
-    const target = join(dirname(path), extname(name) ? name : `${name}${extname(path) || '.md'}`)
+  ipcMain.handle('fs:rename', async (_event, path: string, newName: string) => {
+    const info = await stat(path)
+    const isDir = info.isDirectory()
+    const trimmed = newName.trim()
+    if (!trimmed || trimmed === '.' || trimmed === '..' || /[\\/]/.test(trimmed)) {
+      throw new Error(isDir ? '文件夹名称无效' : '文件名无效')
+    }
+    const target = join(dirname(path), isDir || extname(trimmed) ? trimmed : `${trimmed}${extname(path) || '.md'}`)
     if (target === path) return path
-    if (existsSync(target)) throw new Error(`“${basename(target)}”已存在`)
+    if (target.toLowerCase() !== path.toLowerCase() && existsSync(target)) {
+      throw new Error(`“${basename(target)}”已存在`)
+    }
     const realPath = await resolveTarget(path)
+    const affected: Array<{ tracker: DocumentTracker; cur: string; realCur: string }> = []
+    for (const win of BrowserWindow.getAllWindows()) {
+      const tracker = windowStates.get(win)?.tracker
+      const cur = tracker?.currentPath()
+      if (!tracker || !cur) continue
+      if ((!isDir && cur === path) || (isDir && (cur.startsWith(path + sep) || cur.startsWith(path + '/')))) {
+        affected.push({ tracker, cur, realCur: await resolveTarget(cur) })
+      }
+    }
     await rename(path, target)
-    const { tracker } = stateOf(senderWindow(event))
-    if (tracker.currentPath() === path) tracker.moved(target)
-    await moveHistory(realPath, target).catch((error) => console.error('moving history failed', error))
+    for (const { tracker, cur, realCur } of affected) {
+      const nextCur = isDir ? target + cur.slice(path.length) : target
+      tracker.moved(nextCur)
+      await moveHistory(realCur, nextCur).catch((error) => console.error('moving history failed', error))
+    }
+    if (!isDir && !affected.some((entry) => entry.cur === path)) {
+      await moveHistory(realPath, target).catch((error) => console.error('moving history failed', error))
+    }
     return target
+  })
+
+  ipcMain.handle('fs:trash', (_event, path: string) => shell.trashItem(path))
+
+  ipcMain.handle('fs:filter-existing', async (_event, paths: string[]) => {
+    const checks = await Promise.all(
+      paths.map(async (path) => ({
+        path,
+        exists: await stat(path).then((info) => info.isFile()).catch(() => false)
+      }))
+    )
+    return checks.filter((entry) => entry.exists).map((entry) => entry.path)
   })
 
   ipcMain.handle('fs:save-asset', async (_event, docPath: string, fileName: string, data: ArrayBuffer) => {
@@ -491,6 +525,25 @@ function registerIpc(): void {
   ipcMain.on('menu:title', (event, hasFile: boolean) => {
     const win = senderWindow(event)
     titleMenu((command) => sendMenu(command, win), hasFile).popup({ window: win })
+  })
+
+  ipcMain.on('menu:sidebar', (event, target: SidebarMenuTarget) => {
+    const win = senderWindow(event)
+    sidebarMenu(target, (action) => win.webContents.send('sidebar:action', action, target)).popup({ window: win })
+  })
+
+  ipcMain.on('window:set-spellcheck', (event, enabled: boolean) => {
+    const ses = senderWindow(event).webContents.session
+    ses.setSpellCheckerEnabled(enabled)
+    if (enabled && process.platform !== 'darwin') {
+      try {
+        if (ses.getSpellCheckerLanguages().length === 0 && ses.availableSpellCheckerLanguages.includes('en-US')) {
+          ses.setSpellCheckerLanguages(['en-US'])
+        }
+      } catch {
+        // Platform spellchecker manages its own languages.
+      }
+    }
   })
 
   ipcMain.on('menu:sync', (event, state: MenuState) => {
@@ -579,6 +632,7 @@ app.whenReady().then(async () => {
   if (!singleInstance) return
   app.setName('m-typora')
   app.setAboutPanelOptions({ applicationName: 'm-typora', applicationVersion: app.getVersion() })
+  session.defaultSession.setSpellCheckerEnabled(false)
   sessionState = loadSessionState(sessionFile())
   registerIpc()
   buildMenu({ newWindow: () => createWindow(), send: sendMenu }, await listCustomThemes().catch(() => []))

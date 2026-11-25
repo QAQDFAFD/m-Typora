@@ -35,6 +35,7 @@ export class SourceEditor {
           markdown({ base: markdownLanguage, codeLanguages: languages }),
           sourceHighlight,
           EditorView.lineWrapping,
+          EditorView.contentAttributes.of({ spellcheck: 'false' }),
           EditorView.updateListener.of((update) => {
             if (update.docChanged && !this.silent) onChange(update.state.doc.toString())
           })

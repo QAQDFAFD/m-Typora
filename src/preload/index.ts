@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { DraftRestore, ExternalChange, MenuCommand, MTyporaApi } from '../shared/api'
+import type { DraftRestore, ExternalChange, MenuCommand, MTyporaApi, SidebarAction, SidebarMenuTarget } from '../shared/api'
 
 const api: MTyporaApi = {
   platform: process.platform,
@@ -7,10 +7,13 @@ const api: MTyporaApi = {
   openFolderDialog: () => ipcRenderer.invoke('dialog:open-folder'),
   readFile: (path) => ipcRenderer.invoke('fs:read-file', path),
   createFile: (folder) => ipcRenderer.invoke('fs:create-file', folder),
+  createFolder: (folder) => ipcRenderer.invoke('fs:create-folder', folder),
   readFolder: (root) => ipcRenderer.invoke('fs:read-folder', root),
   searchFolder: (root, query) => ipcRenderer.invoke('fs:search', root, query),
   saveFile: (path, content, options) => ipcRenderer.invoke('fs:save-file', path, content, options ?? {}),
   renameFile: (path, newName) => ipcRenderer.invoke('fs:rename', path, newName),
+  trashPath: (path) => ipcRenderer.invoke('fs:trash', path),
+  filterExistingFiles: (paths) => ipcRenderer.invoke('fs:filter-existing', paths),
   saveAsset: (docPath, fileName, data) => ipcRenderer.invoke('fs:save-asset', docPath, fileName, data),
   uploadImages: (files, config) => ipcRenderer.invoke('image:upload', files, config),
   pathForFile: (file) => webUtils.getPathForFile(file),
@@ -24,6 +27,11 @@ const api: MTyporaApi = {
   confirmDiscard: (name) => ipcRenderer.invoke('dialog:confirm-discard', name),
   showContextMenu: (hasSelection, inTable) => ipcRenderer.send('menu:context', hasSelection, inTable),
   showTitleMenu: (hasFile) => ipcRenderer.send('menu:title', hasFile),
+  showSidebarMenu: (target) => ipcRenderer.send('menu:sidebar', target),
+  onSidebarAction: (handler) => {
+    ipcRenderer.on('sidebar:action', (_event, action: SidebarAction, target: SidebarMenuTarget) => handler(action, target))
+  },
+  setSpellcheck: (enabled) => ipcRenderer.send('window:set-spellcheck', enabled),
   syncMenu: (state) => ipcRenderer.send('menu:sync', state),
   setTitle: (title, edited, path) => ipcRenderer.send('window:set-title', title, edited, path),
   setDirty: (dirty, autoSaveOnClose) => ipcRenderer.send('window:set-dirty', dirty, autoSaveOnClose),

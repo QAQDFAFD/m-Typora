@@ -1,4 +1,4 @@
-import { open, readdir, readFile, stat } from 'node:fs/promises'
+import { mkdir, open, readdir, readFile, stat } from 'node:fs/promises'
 import { basename, join, relative } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import type { SearchHit, TreeNode } from '../shared/api'
@@ -38,11 +38,12 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
   return results
 }
 
-/** Reads a folder as a tree containing only Markdown files and folders that have some. */
-export async function readTree(root: string, depth = 0): Promise<TreeNode[]> {
-  if (depth > MAX_DEPTH) return []
-  const entries = await readdir(root, { withFileTypes: true }).catch(() => [])
+async function readTreeNode(root: string, depth: number): Promise<{ nodes: TreeNode[]; empty: boolean }> {
+  if (depth > MAX_DEPTH) return { nodes: [], empty: false }
+  const entries = await readdir(root, { withFileTypes: true }).catch(() => null)
+  if (!entries) return { nodes: [], empty: false }
   const visible = entries.filter((entry) => !entry.name.startsWith('.'))
+  if (visible.length === 0) return { nodes: [], empty: true }
   const folders: TreeNode[] = []
   const files: TreeNode[] = []
 
@@ -50,8 +51,8 @@ export async function readTree(root: string, depth = 0): Promise<TreeNode[]> {
     const path = join(root, entry.name)
     if (entry.isDirectory()) {
       if (IGNORED_DIRS.has(entry.name)) return
-      const children = await readTree(path, depth + 1)
-      if (children.length > 0) folders.push({ name: entry.name, path, children })
+      const sub = await readTreeNode(path, depth + 1)
+      if (sub.nodes.length > 0 || sub.empty) folders.push({ name: entry.name, path, children: sub.nodes })
     } else if (MARKDOWN_FILE.test(entry.name)) {
       const info = await stat(path).catch(() => null)
       if (!info || !info.isFile()) return
@@ -70,7 +71,27 @@ export async function readTree(root: string, depth = 0): Promise<TreeNode[]> {
   })
 
   const byName = (a: TreeNode, b: TreeNode) => a.name.localeCompare(b.name, undefined, { numeric: true })
-  return [...folders.sort(byName), ...files.sort(byName)]
+  return { nodes: [...folders.sort(byName), ...files.sort(byName)], empty: false }
+}
+
+/** Reads a folder as a tree containing Markdown files, empty folders, and folders that have some. */
+export async function readTree(root: string, depth = 0): Promise<TreeNode[]> {
+  return (await readTreeNode(root, depth)).nodes
+}
+
+/** Creates `未命名文件夹` (or `未命名文件夹 2`, ...) inside `folder` and returns its path. */
+export async function createUntitledFolder(folder: string): Promise<string> {
+  for (let n = 1; n <= 9999; n++) {
+    const candidate = join(folder, n === 1 ? '未命名文件夹' : `未命名文件夹 ${n}`)
+    try {
+      await mkdir(candidate)
+      return candidate
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue
+      throw error
+    }
+  }
+  throw new Error('无法在该文件夹中生成未命名文件夹名称')
 }
 
 /** Atomically creates `未命名.md` (or `未命名 2.md`, ...) inside `folder` and returns its path. */

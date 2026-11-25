@@ -172,12 +172,17 @@ export function focusTableNear(view: EditorView, pos: number): void {
   if (best >= 0) focusCell(view, best, 0, 0)
 }
 
+const MAX_TABLE_ROWS = 100
+const MAX_TABLE_COLS = 30
+
 export function resizeCurrentTable(view: EditorView, rows: number, cols: number): void {
   const info = tableInfo(view.state)
   if (!info) return
-  const next = resizedTable(view.state.schema, info.table, Math.max(2, rows), Math.max(1, cols))
+  const nextRows = Math.max(2, Math.min(MAX_TABLE_ROWS, Math.trunc(rows)))
+  const nextCols = Math.max(1, Math.min(MAX_TABLE_COLS, Math.trunc(cols)))
+  const next = resizedTable(view.state.schema, info.table, nextRows, nextCols)
   view.dispatch(view.state.tr.replaceWith(info.tablePos, info.tablePos + info.table.nodeSize, next))
-  focusCell(view, info.tablePos, Math.min(info.row, rows - 1), Math.min(info.col, cols - 1))
+  focusCell(view, info.tablePos, Math.min(info.row, nextRows - 1), Math.min(info.col, nextCols - 1))
   view.focus()
 }
 
@@ -253,10 +258,15 @@ class TableToolbar implements PluginView {
   private el: HTMLElement
   private sizeLabel: HTMLElement
   private panel: HTMLElement
+  private alignButtons: HTMLElement[]
   private info: TableInfo | null = null
   /** Caret position when the open panel was shown; moving the caret closes the panel. */
   private panelAnchor = -1
   private blurTimer = 0
+  private lastSizeText = ''
+  private lastAlignment: Alignment | null = null
+  private lastRect = { left: Number.NaN, top: Number.NaN, width: Number.NaN }
+  private toolbarHeight = 0
 
   constructor(
     private view: EditorView,
@@ -277,6 +287,7 @@ class TableToolbar implements PluginView {
       <div class="md-table-panel" hidden></div>`
     this.sizeLabel = this.el.querySelector('.md-table-size')!
     this.panel = this.el.querySelector('.md-table-panel')!
+    this.alignButtons = Array.from(this.el.querySelectorAll<HTMLElement>('[data-cmd^="table-align-"]'))
     this.el.hidden = true
     view.dom.parentElement?.append(this.el)
 
@@ -318,11 +329,18 @@ class TableToolbar implements PluginView {
     if (!this.panel.hidden && view.state.selection.from !== this.panelAnchor) this.closePanel()
     this.info = info
     this.el.hidden = false
-    this.sizeLabel.textContent = `${info.map.height} × ${info.map.width}`
+    const sizeText = `${info.map.height} × ${info.map.width}`
+    if (sizeText !== this.lastSizeText) {
+      this.lastSizeText = sizeText
+      this.sizeLabel.textContent = sizeText
+    }
     const alignment = cellAlignment(info)
-    this.el.querySelectorAll<HTMLElement>('[data-cmd^="table-align-"]').forEach((button) => {
-      button.classList.toggle('active', button.dataset.cmd === `table-align-${alignment}`)
-    })
+    if (alignment !== this.lastAlignment) {
+      this.lastAlignment = alignment
+      for (const button of this.alignButtons) {
+        button.classList.toggle('active', button.dataset.cmd === `table-align-${alignment}`)
+      }
+    }
     this.position(info)
   }
 
@@ -341,18 +359,34 @@ class TableToolbar implements PluginView {
     this.el.hidden = true
     this.closePanel()
     this.info = null
+    this.lastRect.left = Number.NaN
+    this.lastRect.top = Number.NaN
+    this.lastRect.width = Number.NaN
   }
 
   private position(info: TableInfo): void {
     const tableDom = this.view.nodeDOM(info.tablePos) as HTMLElement | null
     const host = this.el.parentElement
     if (!tableDom || !host) return
-    const zoom = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--zoom')) || 1
+    const zoom = Number.parseFloat(document.documentElement.style.getPropertyValue('--zoom')) || 1
     const tableRect = tableDom.getBoundingClientRect()
     const hostRect = host.getBoundingClientRect()
-    this.el.style.left = `${(tableRect.left - hostRect.left) / zoom}px`
-    this.el.style.width = `${tableRect.width / zoom}px`
-    this.el.style.top = `${(tableRect.top - hostRect.top) / zoom - this.el.offsetHeight}px`
+    const height = this.toolbarHeight || (this.toolbarHeight = this.el.offsetHeight || 28)
+    const left = (tableRect.left - hostRect.left) / zoom
+    const width = tableRect.width / zoom
+    const top = (tableRect.top - hostRect.top) / zoom - height
+    if (left !== this.lastRect.left) {
+      this.lastRect.left = left
+      this.el.style.left = `${left}px`
+    }
+    if (width !== this.lastRect.width) {
+      this.lastRect.width = width
+      this.el.style.width = `${width}px`
+    }
+    if (top !== this.lastRect.top) {
+      this.lastRect.top = top
+      this.el.style.top = `${top}px`
+    }
   }
 
   private onClick(event: MouseEvent): void {
@@ -370,7 +404,7 @@ class TableToolbar implements PluginView {
       const rows = Number(this.panel.querySelector<HTMLInputElement>('[name="rows"]')!.value)
       const cols = Number(this.panel.querySelector<HTMLInputElement>('[name="cols"]')!.value)
       this.closePanel()
-      if (rows > 0 && cols > 0) resizeCurrentTable(this.view, rows, cols)
+      if (Number.isFinite(rows) && Number.isFinite(cols) && rows > 0 && cols > 0) resizeCurrentTable(this.view, rows, cols)
       else this.view.focus()
     }
   }
@@ -389,11 +423,12 @@ class TableToolbar implements PluginView {
     } else {
       const { height, width } = this.info!.map
       this.panel.innerHTML = `
-        <label>行 <input name="rows" type="number" min="2" max="100" value="${height}"></label>
-        <label>列 <input name="cols" type="number" min="1" max="30" value="${width}"></label>
+        <label>行 <input name="rows" type="number" min="2" max="${MAX_TABLE_ROWS}" value="${height}"></label>
+        <label>列 <input name="cols" type="number" min="1" max="${MAX_TABLE_COLS}" value="${width}"></label>
         <button data-action="apply-size" class="md-table-apply">确定</button>`
       this.panel.querySelectorAll('input').forEach((input) =>
         input.addEventListener('keydown', (event) => {
+          if (event.isComposing || event.keyCode === 229) return
           if (event.key === 'Enter') this.panel.querySelector<HTMLElement>('[data-action="apply-size"]')!.click()
           if (event.key === 'Escape') this.closePanel(true)
         })

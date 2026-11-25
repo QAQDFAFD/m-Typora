@@ -20,11 +20,18 @@ export const mathInlineEditPlugin = $prose(
       view(view) {
         let pending: { pos: number; original: string; value: string } | null = null
         const editorOf = (target: EventTarget | null) => (target instanceof Element ? target.closest(EDITOR) : null)
+        const disableSpellcheck = (box: Element | null) => {
+          if (!box) return
+          box.setAttribute('spellcheck', 'false')
+          box.querySelector('.ProseMirror')?.setAttribute('spellcheck', 'false')
+        }
+        const onFocusIn = (event: FocusEvent) => disableSpellcheck(editorOf(event.target))
 
         const record = (event: Event) => {
           const box = editorOf(event.target)
           const math = selectedMath(view.state)
           if (!box || !math) return
+          disableSpellcheck(box)
           const value = box.querySelector('.ProseMirror')?.textContent ?? ''
           pending = { pos: math.from, original: math.node.attrs.value, value }
         }
@@ -37,12 +44,14 @@ export const mathInlineEditPlugin = $prose(
           view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, math.to)))
           view.focus()
         }
+        document.addEventListener('focusin', onFocusIn, true)
         document.addEventListener('input', record, true)
         document.addEventListener('keyup', record, true)
         document.addEventListener('keydown', onKeyDown, true)
 
         return {
           update(view) {
+            if (selectedMath(view.state)) disableSpellcheck(document.querySelector(EDITOR))
             if (!pending || selectedMath(view.state)?.from === pending.pos) return
             const { pos, original, value } = pending
             pending = null
@@ -56,6 +65,7 @@ export const mathInlineEditPlugin = $prose(
             })
           },
           destroy() {
+            document.removeEventListener('focusin', onFocusIn, true)
             document.removeEventListener('input', record, true)
             document.removeEventListener('keyup', record, true)
             document.removeEventListener('keydown', onKeyDown, true)

@@ -1,6 +1,6 @@
-import type { SearchHit, SidebarView, TreeNode } from '../../shared/api'
+import type { SearchHit, SidebarMenuTarget, SidebarView, TreeNode } from '../../shared/api'
 import type { Heading } from './markdown-utils'
-import { escapeHtml, fileName } from './markdown-utils'
+import { escapeHtml, fileName, stripExtension } from './markdown-utils'
 
 interface SidebarHandlers {
   onOpenFile(path: string): void
@@ -10,6 +10,8 @@ interface SidebarHandlers {
   onViewChange(view: SidebarView): void
   onSearch(query: string): Promise<SearchHit[]>
   onOpenHit(hit: SearchHit, query: string): void
+  onContextMenu(target: SidebarMenuTarget): void
+  onRenamePath(path: string, isDir: boolean, newName: string): Promise<void>
 }
 
 const VIEW_TITLES: Record<SidebarView, string> = {
@@ -92,6 +94,8 @@ export class Sidebar {
   private searchHits: SearchHit[] = []
   private searchTimer = 0
   private searchSeq = 0
+  private renamingPath: string | null = null
+  private pendingRender = false
 
   private titleEl: HTMLElement
   private newButton: HTMLButtonElement
@@ -124,6 +128,7 @@ export class Sidebar {
       if (button.dataset.view) this.handlers.onViewChange(button.dataset.view as SidebarView)
     })
     this.body.addEventListener('click', (event) => this.onBodyClick(event))
+    this.body.addEventListener('contextmenu', (event) => this.onBodyContextMenu(event))
   }
 
   getView(): SidebarView {
@@ -148,7 +153,10 @@ export class Sidebar {
     if (rootChanged || (this.selectedFolder && !this.folderExists(this.selectedFolder, tree))) {
       this.selectedFolder = null
     }
-    if (this.view === 'articles' || this.view === 'tree') this.render()
+    if (this.view === 'articles' || this.view === 'tree') {
+      if (this.renamingPath !== null) this.pendingRender = true
+      else this.render()
+    }
   }
 
   hasFolder(): boolean {
@@ -187,7 +195,81 @@ export class Sidebar {
 
   setActiveFile(path: string | null): void {
     this.activeFile = path
-    if (this.view === 'articles' || this.view === 'tree') this.render()
+    if (this.view === 'articles' || this.view === 'tree') {
+      if (this.renamingPath !== null) this.pendingRender = true
+      else this.render()
+    }
+  }
+
+  /** Updates stored folder states (collapsed / selected) when a folder is renamed. */
+  remapPath(oldPath: string, newPath: string): void {
+    const rewrite = (p: string) => {
+      if (p === oldPath) return newPath
+      if (p.startsWith(`${oldPath}/`) || p.startsWith(`${oldPath}\\`)) return newPath + p.slice(oldPath.length)
+      return p
+    }
+    this.collapsedFolders = new Set([...this.collapsedFolders].map(rewrite))
+    if (this.selectedFolder) this.selectedFolder = rewrite(this.selectedFolder)
+  }
+
+  /** Starts inline renaming for a file or folder visible in the tree or article list. */
+  startRename(path: string): boolean {
+    const row = Array.from(this.body.querySelectorAll<HTMLElement>('[data-path]')).find((el) => el.dataset.path === path)
+    const label = row?.querySelector<HTMLElement>('.tree-label, .article-name')
+    if (!row || !label) return false
+
+    const isDir = row.dataset.kind === 'folder'
+    const original = fileName(path)
+    const input = document.createElement('input')
+    input.type = 'text'
+    input.className = 'sidebar-rename-input'
+    input.value = original
+    input.spellcheck = false
+
+    row.scrollIntoView({ block: 'nearest' })
+    this.renamingPath = path
+    this.pendingRender = false
+    label.hidden = true
+    label.after(input)
+    input.focus()
+    input.setSelectionRange(0, isDir ? original.length : stripExtension(original).length)
+
+    let done = false
+    const finish = async (commit: boolean) => {
+      if (done) return
+      done = true
+      input.removeEventListener('keydown', onKey)
+      input.removeEventListener('blur', onBlur)
+      const next = input.value.trim()
+      input.remove()
+      label.hidden = false
+      this.renamingPath = null
+      let renamed = false
+      if (commit && next && next !== original) {
+        try {
+          await this.handlers.onRenamePath(path, isDir, next)
+          renamed = true
+        } catch {
+          // The error has been surfaced by onRenamePath; restore the previous label.
+        }
+      }
+      if (!renamed || this.pendingRender) {
+        this.pendingRender = false
+        this.render()
+      }
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.isComposing || event.keyCode === 229) return
+      if (event.key === 'Enter' || event.key === 'Escape') {
+        event.preventDefault()
+        event.stopPropagation()
+        void finish(event.key === 'Enter')
+      }
+    }
+    const onBlur = () => void finish(true)
+    input.addEventListener('keydown', onKey)
+    input.addEventListener('blur', onBlur)
+    return true
   }
 
   setHeadings(headings: Heading[]): void {
@@ -275,7 +357,7 @@ export class Sidebar {
       row.dataset.kind = isFolder ? 'folder' : 'file'
       row.style.paddingLeft = `${8 + depth * 16}px`
       row.title = node.path
-      row.innerHTML = `${disclosure(isFolder, collapsed)}${isFolder ? ICONS.folder : ICONS.file}`
+      row.innerHTML = `${disclosure(isFolder && node.children!.length > 0, collapsed)}${isFolder ? ICONS.folder : ICONS.file}`
       const label = document.createElement('span')
       label.className = 'tree-label'
       label.textContent = node.name
@@ -367,8 +449,23 @@ export class Sidebar {
       .join('')
   }
 
+  private onBodyContextMenu(event: MouseEvent): void {
+    if (!this.root || (this.view !== 'tree' && this.view !== 'articles')) return
+    const target = event.target as HTMLElement
+    if (target.closest('.sidebar-rename-input')) return
+    event.preventDefault()
+    const node = target.closest<HTMLElement>('[data-path]')
+    if (node) {
+      const kind = node.dataset.kind === 'folder' ? 'folder' : 'file'
+      this.handlers.onContextMenu({ kind, path: node.dataset.path! })
+      return
+    }
+    this.handlers.onContextMenu({ kind: 'root', path: this.root })
+  }
+
   private onBodyClick(event: MouseEvent): void {
     const target = event.target as HTMLElement
+    if (target.closest('.sidebar-rename-input')) return
     if (target.closest('[data-action="open-folder"]')) return this.handlers.onOpenFolder()
 
     const toggle = target.closest<HTMLElement>('[data-toggle]')

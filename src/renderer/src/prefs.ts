@@ -32,6 +32,7 @@ export interface Prefs {
   lineWidth: LineWidth
   autoSave: boolean
   autoPair: boolean
+  spellcheck: boolean
   lastFolder: string | null
   recentFiles: string[]
   imageInsert: ImageInsert
@@ -61,6 +62,7 @@ const DEFAULTS: Prefs = {
   lineWidth: 'default',
   autoSave: true,
   autoPair: true,
+  spellcheck: false,
   lastFolder: null,
   recentFiles: [],
   imageInsert: 'assets',
@@ -85,6 +87,7 @@ export function loadPrefs(): Prefs {
     if (!SIDEBAR_VIEWS.includes(prefs.sidebarView)) prefs.sidebarView = DEFAULTS.sidebarView
     if (!Array.isArray(prefs.recentFiles)) prefs.recentFiles = []
     if (!IMAGE_ALIGNS.includes(prefs.imageAlign)) prefs.imageAlign = DEFAULTS.imageAlign
+    prefs.spellcheck = Boolean(prefs.spellcheck)
     prefs.picgoPort = validPort(prefs.picgoPort) ?? DEFAULT_PICGO_PORT
     return prefs
   } catch {

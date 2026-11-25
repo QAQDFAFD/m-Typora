@@ -1,3 +1,4 @@
+import { EditorView as CmEditorView } from '@codemirror/view'
 import { Crepe } from '@milkdown/crepe'
 import { editorViewCtx, schemaCtx, serializerCtx, type CmdKey } from '@milkdown/kit/core'
 import { redo, undo } from '@milkdown/kit/prose/history'
@@ -6,6 +7,7 @@ import { NodeSelection, Plugin, PluginKey, Selection, TextSelection } from '@mil
 import type { EditorView } from '@milkdown/kit/prose/view'
 import {
   createCodeBlockCommand,
+  inlineCodeAttr,
   insertHrCommand,
   insertImageCommand,
   toggleEmphasisCommand,
@@ -64,6 +66,8 @@ export class WysiwygEditor {
   private crepe: Crepe
   private ready: Promise<unknown>
   private suppressChange = false
+  private spellcheck = false
+  private created = false
 
   constructor(private options: WysiwygOptions) {
     this.crepe = new Crepe({
@@ -89,6 +93,7 @@ export class WysiwygEditor {
         [Crepe.Feature.Cursor]: { virtual: false, color: '#9fb8e8', width: 2 },
         [Crepe.Feature.CodeMirror]: {
           theme: codeFenceTheme,
+          extensions: [CmEditorView.contentAttributes.of({ spellcheck: 'false' })],
           searchPlaceholder: '搜索语言',
           noResultText: '无匹配',
           copyText: '复制',
@@ -100,6 +105,7 @@ export class WysiwygEditor {
     })
     configureMarkdown(this.crepe.editor)
     this.crepe.editor.config((ctx) => {
+      ctx.update(inlineCodeAttr.key, (prev) => (mark) => ({ ...prev(mark), spellcheck: 'false' }))
       ctx.update(uploadConfig.key, (prev) => ({
         ...prev,
         uploader: async (files, schema) => {
@@ -141,11 +147,25 @@ export class WysiwygEditor {
       .use(createAutoPairPlugin(options.autoPair))
       .use(createFocusPlugin(options.onCursorMove))
       .use(docChangePlugin)
-    this.ready = this.crepe.create()
+    this.ready = this.crepe.create().then((value) => {
+      this.created = true
+      this.applySpellcheck()
+      return value
+    })
   }
 
   whenReady(): Promise<unknown> {
     return this.ready
+  }
+
+  setSpellcheck(enabled: boolean): void {
+    this.spellcheck = enabled
+    this.applySpellcheck()
+  }
+
+  private applySpellcheck(): void {
+    this.options.root.spellcheck = this.spellcheck
+    if (this.created) this.view().dom.setAttribute('spellcheck', String(this.spellcheck))
   }
 
   getMarkdown(): string {
@@ -297,6 +317,7 @@ export class WysiwygEditor {
   private fragmentHtml(schema: Parameters<typeof DOMSerializer.fromSchema>[0], doc: ProseNode): string {
     const container = document.createElement('div')
     container.appendChild(DOMSerializer.fromSchema(schema).serializeFragment(doc.content))
+    container.querySelectorAll('code[spellcheck]').forEach((el) => el.removeAttribute('spellcheck'))
     return container.innerHTML
   }
 

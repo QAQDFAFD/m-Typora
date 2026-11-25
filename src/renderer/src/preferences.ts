@@ -107,6 +107,8 @@ export class PreferencesDialog {
         return `
           <h3>输入</h3>
           ${check('autoPair', '自动配对括号和引号', prefs)}
+          ${check('spellcheck', '拼写检查', prefs)}
+          <p class="prefs-hint">代码块、行内代码与数学公式不参与拼写检查。</p>
           <h3>版面</h3>
           <label class="prefs-row">正文宽度
             <select data-pref="lineWidth">${option('default', '默认', prefs.lineWidth)}${option('wide', '较宽', prefs.lineWidth)}${option('full', '全宽', prefs.lineWidth)}</select>

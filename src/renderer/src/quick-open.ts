@@ -23,6 +23,7 @@ export class QuickOpen {
   private input: HTMLInputElement
   private list: HTMLElement
   private items: string[] = []
+  private folderRoot: string | null = null
   private results: string[] = []
   private selected = 0
 
@@ -45,7 +46,8 @@ export class QuickOpen {
     })
   }
 
-  open(recent: string[], folderFiles: string[]): void {
+  open(recent: string[], folderFiles: string[], folderRoot: string | null = null): void {
+    this.folderRoot = folderRoot
     this.items = [...new Set([...recent, ...folderFiles])]
     this.el.hidden = false
     this.input.value = ''
@@ -57,13 +59,21 @@ export class QuickOpen {
     this.el.hidden = true
   }
 
+  private displayPath(path: string): string {
+    const root = this.folderRoot?.replace(/[\\/]+$/, '')
+    if (root && (path.startsWith(`${root}/`) || path.startsWith(`${root}\\`))) {
+      return path.slice(root.length + 1)
+    }
+    return path
+  }
+
   private filter(): void {
     const query = this.input.value.trim()
     this.results = this.items
       .map((path) => {
         // Matches on the file name rank ahead of matches that only hit the directory.
         const nameScore = fuzzyScore(query, fileName(path))
-        const pathScore = fuzzyScore(query, path)
+        const pathScore = fuzzyScore(query, this.displayPath(path))
         return { path, score: nameScore >= 0 ? nameScore : pathScore >= 0 ? pathScore + 50 : -1 }
       })
       .filter((entry) => entry.score >= 0)
@@ -80,27 +90,38 @@ export class QuickOpen {
       return
     }
     this.list.innerHTML = this.results
-      .map(
-        (path, index) => `
-        <li class="quick-open-item${index === this.selected ? ' selected' : ''}" data-index="${index}">
+      .map((path, index) => {
+        const shown = this.displayPath(path)
+        return `
+        <li class="quick-open-item${index === this.selected ? ' selected' : ''}" data-index="${index}" title="${escapeHtml(path)}">
           <span class="quick-open-name">${escapeHtml(fileName(path))}</span>
-          <span class="quick-open-path">${escapeHtml(path)}</span>
+          <span class="quick-open-path">${escapeHtml(shown)}</span>
         </li>`
-      )
+      })
       .join('')
     this.list.querySelector('.selected')?.scrollIntoView({ block: 'nearest' })
   }
 
+  private updateSelection(prev: number): void {
+    this.list.children[prev]?.classList.remove('selected')
+    const current = this.list.children[this.selected]
+    if (!current) return
+    current.classList.add('selected')
+    current.scrollIntoView({ block: 'nearest' })
+  }
+
   private onKey(event: KeyboardEvent): void {
+    if (event.isComposing || event.keyCode === 229) return
     if (event.key === 'Escape') {
       event.preventDefault()
       this.close()
     } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault()
       if (this.results.length === 0) return
+      const prev = this.selected
       const step = event.key === 'ArrowDown' ? 1 : -1
       this.selected = (this.selected + step + this.results.length) % this.results.length
-      this.render()
+      this.updateSelection(prev)
     } else if (event.key === 'Enter') {
       event.preventDefault()
       this.pick(this.selected)

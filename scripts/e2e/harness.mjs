@@ -22,6 +22,7 @@ export async function launch({ port = 9240, size = '1180x800', scale, profile, p
   args.push(APP)
   // ELECTRON_ENABLE_LOGGING forwards renderer console output, so tests can fail on page errors.
   const env = { ...process.env, M_TYPORA_E2E: '1', M_TYPORA_USER_DATA: profile, M_TYPORA_SMOKE_SIZE: size, ELECTRON_ENABLE_LOGGING: '1' }
+  delete env.ELECTRON_RUN_AS_NODE
   const child = spawn(ELECTRON, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const logs = []
   child.stdout.on('data', (d) => logs.push(String(d)))
@@ -81,6 +82,15 @@ export async function launch({ port = 9240, size = '1180x800', scale, profile, p
     electron.dialog.showMessageBoxSync = (_w, o) => (e2e.dialogs.push(['messageSync', o.message]), e2e.answers.message)
     electron.shell.openExternal = async (url) => { e2e.shell.push(['openExternal', url]) }
     electron.shell.showItemInFolder = (p) => { e2e.shell.push(['showItemInFolder', p]) }
+    electron.shell.trashItem = async (p) => {
+      e2e.shell.push(['trashItem', p])
+      const os = process.mainModule.require('node:os')
+      const path = process.mainModule.require('node:path')
+      const fs = process.mainModule.require('node:fs')
+      const tmp = fs.realpathSync(os.tmpdir())
+      const real = fs.existsSync(p) ? fs.realpathSync(p) : path.resolve(p)
+      if (real.startsWith(tmp + path.sep)) fs.rmSync(p, { recursive: true, force: true })
+    }
     electron.Menu.prototype.popup = function () { e2e.menus.push(this) }
     // The window is shown without activating the app; act as focused even when the user
     // switches to another app mid-run (focus events, :focus, clipboard access).

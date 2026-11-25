@@ -1,5 +1,10 @@
 appId: io.github.qaqdfafd.mtypora
 productName: m-typora
+electronLanguages:
+  - en
+  - en-US
+  - zh_CN
+  - zh-CN
 directories:
   output: dist
   buildResources: build

@@ -1,5 +1,5 @@
 import type { EditorView } from '@milkdown/kit/prose/view'
-import type { CustomTheme, DraftRestore, ExternalChange, MenuCommand, MenuState, SearchHit, SidebarView, ThemeId, UploadConfig, UploadFile } from '../../shared/api'
+import type { CustomTheme, DraftRestore, ExternalChange, MenuCommand, MenuState, SearchHit, SidebarAction, SidebarMenuTarget, SidebarView, ThemeId, UploadConfig, UploadFile } from '../../shared/api'
 import { bridge, isDesktop } from './bridge'
 import { FindBar } from './findbar'
 import { FrontMatterBlock, joinFrontMatter, splitFrontMatter } from './front-matter'
@@ -45,6 +45,7 @@ export class App {
   private lastTitleSent: { title: string; edited: boolean; path: string | null } | null = null
   private lastDirtySent: { dirty: boolean; autoSaveOnClose: boolean } | null = null
   private lastMenuSent: MenuState | null = null
+  private lastSpellcheckSent: boolean | null = null
 
   private root = document.documentElement
   private scroller = $('#scroller')
@@ -103,7 +104,11 @@ export class App {
       onSelectHeading: (index) => this.revealHeading(index),
       onViewChange: (view) => this.showSidebarView(view, false),
       onSearch: (query) => (this.sidebar.folder() ? bridge.searchFolder(this.sidebar.folder()!, query) : Promise.resolve([])),
-      onOpenHit: (hit, query) => this.openSearchHit(hit, query)
+      onOpenHit: (hit, query) => this.openSearchHit(hit, query),
+      onContextMenu: (target) => {
+        if (isDesktop) bridge.showSidebarMenu(target)
+      },
+      onRenamePath: (path, isDir, newName) => this.renameSidebarPath(path, isDir, newName)
     })
     this.findBar = new FindBar($('#findbar'), {
       onQuery: (query) => {
@@ -151,6 +156,7 @@ export class App {
     bridge.onFolderChanged(whenStarted(() => this.refreshFolder()))
     bridge.onDraftRestore(whenStarted((draft) => this.restoreDraft(draft)))
     bridge.onAlwaysOnTop(whenStarted((on) => this.showAlwaysOnTop(on)))
+    bridge.onSidebarAction(whenStarted((action, target) => void this.onSidebarAction(action, target)))
 
     this.root.dataset.platform = bridge.platform
     if (!isMacLike()) localizeShortcutHints(document.body)
@@ -208,8 +214,17 @@ export class App {
         if (file) this.load(file.path, file.content)
         return
       }
-      case 'open-quickly':
-        return this.quickOpen.open(this.prefs.recentFiles, this.sidebar.allFiles())
+      case 'open-quickly': {
+        let recent = this.prefs.recentFiles
+        if (isDesktop && recent.length > 0) {
+          recent = await bridge.filterExistingFiles(recent)
+          if (recent.length !== this.prefs.recentFiles.length) {
+            this.prefs = { ...this.prefs, recentFiles: recent }
+            savePrefs(this.prefs)
+          }
+        }
+        return this.quickOpen.open(recent, this.sidebar.allFiles(), this.sidebar.folder())
+      }
       case 'open-folder': {
         const folder = await bridge.openFolderDialog()
         if (folder) this.showFolder(folder.root, folder.tree)
@@ -266,6 +281,7 @@ export class App {
       case 'find-prev':
         if (this.mode === 'source') return void this.source?.exec(command)
         if (!this.findBar.isOpen()) return this.findBar.open(false, this.selectedPlainText())
+        this.findBar.flush()
         stepSearch(this.wysiwyg.view(), command === 'find-next' ? 1 : -1)
         return this.updateFindCount()
       case 'copy-markdown':
@@ -427,6 +443,7 @@ export class App {
   private onExternalChange(path: string, change: ExternalChange): void {
     if (path !== this.path) return
     if (change === 'deleted') {
+      if (this.missing) return
       this.missing = true
       this.setDirty(true)
       this.notice.show('deleted', `“${fileName(path)}”已被删除或移动。保存时需要重新选择位置。`, [
@@ -522,6 +539,108 @@ export class App {
   private async refreshFolder(): Promise<void> {
     const root = this.sidebar.folder()
     if (root) this.sidebar.setFolder(root, await bridge.readFolder(root))
+  }
+
+  private async onSidebarAction(action: SidebarAction, target: SidebarMenuTarget): Promise<void> {
+    const dir = target.kind === 'file' ? dirName(target.path) : target.path
+    switch (action) {
+      case 'new-file': {
+        if (!(await this.confirmLeave())) return
+        try {
+          const file = await bridge.createFile(dir)
+          this.sidebar.expandFolder(dir)
+          this.load(file.path, file.content)
+          await this.refreshFolder()
+          if (!this.sidebar.startRename(file.path) && bridge.platform === 'darwin') this.startRename()
+        } catch (error) {
+          this.toast(`新建文件失败：${errorMessage(error)}`, 'error')
+        }
+        return
+      }
+      case 'new-folder': {
+        try {
+          const created = await bridge.createFolder(dir)
+          if (this.sidebar.getView() !== 'tree') this.showSidebarView('tree', false)
+          this.sidebar.expandFolder(dir)
+          await this.refreshFolder()
+          this.sidebar.startRename(created)
+        } catch (error) {
+          this.toast(`新建文件夹失败：${errorMessage(error)}`, 'error')
+        }
+        return
+      }
+      case 'rename':
+        this.sidebar.startRename(target.path)
+        return
+      case 'trash':
+        await this.trashSidebarPath(target.path, target.kind === 'folder')
+        return
+      case 'reveal':
+        bridge.revealInFinder(target.path)
+        return
+      case 'copy-path':
+        await navigator.clipboard.writeText(target.path)
+        return
+    }
+  }
+
+  private async renameSidebarPath(oldPath: string, isDir: boolean, newName: string): Promise<void> {
+    let newPath: string
+    try {
+      newPath = await bridge.renameFile(oldPath, newName)
+    } catch (error) {
+      this.toast(`重命名失败：${errorMessage(error)}`, 'error')
+      throw error
+    }
+    let prefsChanged = false
+    if (isDir) {
+      this.sidebar.remapPath(oldPath, newPath)
+      const nextRecent = this.prefs.recentFiles.map((p) => (isPathInside(p, oldPath) ? newPath + p.slice(oldPath.length) : p))
+      if (nextRecent.some((p, i) => p !== this.prefs.recentFiles[i])) {
+        this.prefs = { ...this.prefs, recentFiles: nextRecent }
+        prefsChanged = true
+      }
+      if (this.path && isPathInside(this.path, oldPath)) {
+        const nextOpen = newPath + this.path.slice(oldPath.length)
+        moveViewState(this.path, nextOpen)
+        this.path = nextOpen
+        this.setDirty(this.dirty)
+        this.sidebar.setActiveFile(this.path)
+      }
+    } else {
+      moveViewState(oldPath, newPath)
+      const nextRecent = this.prefs.recentFiles.map((p) => (p === oldPath ? newPath : p))
+      if (nextRecent.some((p, i) => p !== this.prefs.recentFiles[i])) {
+        this.prefs = { ...this.prefs, recentFiles: nextRecent }
+        prefsChanged = true
+      }
+      if (this.path === oldPath) {
+        this.path = newPath
+        this.setDirty(this.dirty)
+        this.sidebar.setActiveFile(this.path)
+      }
+    }
+    if (prefsChanged) savePrefs(this.prefs)
+    await this.refreshFolder()
+  }
+
+  private async trashSidebarPath(targetPath: string, isDir: boolean): Promise<void> {
+    try {
+      await bridge.trashPath(targetPath)
+    } catch (error) {
+      this.toast(`移到废纸篓失败：${errorMessage(error)}`, 'error')
+      return
+    }
+    const removed = (p: string) => p === targetPath || (isDir && isPathInside(p, targetPath))
+    const nextRecent = this.prefs.recentFiles.filter((p) => !removed(p))
+    if (nextRecent.length !== this.prefs.recentFiles.length) {
+      this.prefs = { ...this.prefs, recentFiles: nextRecent }
+      savePrefs(this.prefs)
+    }
+    if (this.path && removed(this.path)) {
+      this.onExternalChange(this.path, 'deleted')
+    }
+    await this.refreshFolder()
   }
 
   /** Returns false when the user cancels; saves or discards otherwise. */
@@ -721,6 +840,7 @@ export class App {
         const oldPath = this.path
         this.path = await bridge.renameFile(oldPath, next)
         moveViewState(oldPath, this.path)
+        this.prefs = { ...this.prefs, recentFiles: this.prefs.recentFiles.filter((p) => p !== oldPath) }
         this.setDirty(this.dirty)
         this.rememberRecent(this.path)
         this.sidebar.setActiveFile(this.path)
@@ -731,6 +851,7 @@ export class App {
       }
     }
     const onKey = (event: KeyboardEvent) => {
+      if (event.isComposing || event.keyCode === 229) return
       if (event.key === 'Enter' || event.key === 'Escape') {
         event.preventDefault()
         void finish(event.key === 'Enter')
@@ -897,6 +1018,11 @@ export class App {
       dark: getComputedStyle(this.root).colorScheme.includes('dark')
     }
     if (this.sidebar.getView() !== prefs.sidebarView) this.sidebar.setView(prefs.sidebarView)
+    this.wysiwyg.setSpellcheck(prefs.spellcheck)
+    if (isDesktop && this.lastSpellcheckSent !== prefs.spellcheck) {
+      this.lastSpellcheckSent = prefs.spellcheck
+      bridge.setSpellcheck(prefs.spellcheck)
+    }
     this.preferences.sync(prefs)
     this.syncMenu()
   }
@@ -1284,6 +1410,10 @@ function relativePath(from: string, to: string): string {
   let common = 0
   while (common < a.length && common < b.length && a[common] === b[common]) common++
   return [...a.slice(common).map(() => '..'), ...b.slice(common)].join('/')
+}
+
+function isPathInside(path: string, folder: string): boolean {
+  return path.startsWith(`${folder}/`) || path.startsWith(`${folder}\\`)
 }
 
 function round(value: number): number {

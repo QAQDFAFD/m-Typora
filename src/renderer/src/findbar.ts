@@ -16,6 +16,7 @@ export class FindBar {
   private caseButton: HTMLButtonElement
   private wordButton: HTMLButtonElement
   private query: SearchQuery = { text: '', caseSensitive: false, wholeWord: false }
+  private debounceTimer = 0
 
   constructor(private el: HTMLElement, private handlers: FindBarHandlers) {
     el.innerHTML = `
@@ -41,20 +42,36 @@ export class FindBar {
     this.caseButton = el.querySelector('[data-toggle="case"]')!
     this.wordButton = el.querySelector('[data-toggle="word"]')!
 
-    this.input.addEventListener('input', () => this.emitQuery())
+    this.input.addEventListener('input', () => {
+      window.clearTimeout(this.debounceTimer)
+      if (!this.input.value) {
+        this.debounceTimer = 0
+        this.emitQuery()
+        return
+      }
+      this.debounceTimer = window.setTimeout(() => {
+        this.debounceTimer = 0
+        this.emitQuery()
+      }, 60)
+    })
     this.input.addEventListener('keydown', (event) => {
+      if (event.isComposing || event.keyCode === 229) return
       if (event.key === 'Enter') {
         event.preventDefault()
+        this.flush()
         this.handlers.onStep(event.shiftKey ? -1 : 1)
       }
     })
     this.replaceInput.addEventListener('keydown', (event) => {
+      if (event.isComposing || event.keyCode === 229) return
       if (event.key === 'Enter') {
         event.preventDefault()
+        this.flush()
         this.handlers.onReplace(this.replaceInput.value)
       }
     })
     el.addEventListener('keydown', (event) => {
+      if (event.isComposing || event.keyCode === 229) return
       if (event.key === 'Escape') {
         event.preventDefault()
         this.handlers.onClose()
@@ -63,16 +80,29 @@ export class FindBar {
     el.addEventListener('click', (event) => {
       const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button')
       if (!button) return
-      if (button.dataset.step) this.handlers.onStep(Number(button.dataset.step) as 1 | -1)
+      if (button.dataset.step) {
+        this.flush()
+        this.handlers.onStep(Number(button.dataset.step) as 1 | -1)
+      }
       if (button.dataset.action === 'close') this.handlers.onClose()
-      if (button.dataset.action === 'replace') this.handlers.onReplace(this.replaceInput.value)
-      if (button.dataset.action === 'replace-all') this.handlers.onReplaceAll(this.replaceInput.value)
+      if (button.dataset.action === 'replace') {
+        this.flush()
+        this.handlers.onReplace(this.replaceInput.value)
+      }
+      if (button.dataset.action === 'replace-all') {
+        this.flush()
+        this.handlers.onReplaceAll(this.replaceInput.value)
+      }
       if (button.dataset.toggle === 'case') {
         this.query.caseSensitive = !this.query.caseSensitive
+        window.clearTimeout(this.debounceTimer)
+        this.debounceTimer = 0
         this.emitQuery()
       }
       if (button.dataset.toggle === 'word') {
         this.query.wholeWord = !this.query.wholeWord
+        window.clearTimeout(this.debounceTimer)
+        this.debounceTimer = 0
         this.emitQuery()
       }
     })
@@ -83,6 +113,8 @@ export class FindBar {
   }
 
   open(replace: boolean, initial?: string): void {
+    window.clearTimeout(this.debounceTimer)
+    this.debounceTimer = 0
     this.el.hidden = false
     this.el.classList.toggle('with-replace', replace)
     if (initial) this.input.value = initial
@@ -92,7 +124,16 @@ export class FindBar {
   }
 
   close(): void {
+    window.clearTimeout(this.debounceTimer)
+    this.debounceTimer = 0
     this.el.hidden = true
+  }
+
+  flush(): void {
+    if (!this.debounceTimer) return
+    window.clearTimeout(this.debounceTimer)
+    this.debounceTimer = 0
+    this.emitQuery()
   }
 
   setCount(current: number, total: number): void {
