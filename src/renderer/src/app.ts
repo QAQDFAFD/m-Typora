@@ -12,6 +12,7 @@ import { QuickOpen } from './quick-open'
 import { clearSearch, replaceAll, replaceCurrent, searchStatus, setSearchQuery, stepSearch } from './search-plugin'
 import { Sidebar } from './sidebar'
 import type { SourceEditor } from './source'
+import { getViewState, moveViewState, saveViewState } from './view-state'
 import { WELCOME_MARKDOWN } from './welcome'
 import { WysiwygEditor } from './wysiwyg'
 
@@ -70,6 +71,8 @@ export class App {
   private draftTimer = 0
   private cleanCheckTimer = 0
   private cleanCheckIdle = 0
+  private viewStateTimer = 0
+  private scrollRestoreToken = 0
   private editVersion = 0
   private footerTimer = 0
   private toastTimer = 0
@@ -79,7 +82,10 @@ export class App {
     this.wysiwyg = new WysiwygEditor({
       root: $('#wysiwyg'),
       onChange: () => this.onContentChange(),
-      onCursorMove: (view) => this.keepCursorCentered(view),
+      onCursorMove: (view) => {
+        this.keepCursorCentered(view)
+        this.scheduleViewStateSave()
+      },
       resolveImage: (src) => this.resolveImage(src),
       uploadImage: (file) => this.storeImage(file),
       autoPair: () => this.prefs.autoPair,
@@ -178,9 +184,24 @@ export class App {
     if (command.startsWith('theme-')) return this.updatePrefs({ theme: command.slice(6) as ThemeId })
 
     switch (command) {
-      case 'new':
-        if (await this.confirmLeave()) this.load(null, '')
+      case 'new': {
+        if (!(await this.confirmLeave())) return
+        const folder = isDesktop ? this.sidebar.targetFolder() : null
+        if (!folder) {
+          this.load(null, '')
+          return
+        }
+        try {
+          const file = await bridge.createFile(folder)
+          this.sidebar.expandFolder(folder)
+          this.load(file.path, file.content)
+          void this.refreshFolder()
+          if (bridge.platform === 'darwin') this.startRename()
+        } catch (error) {
+          this.toast(`新建文件失败：${errorMessage(error)}`, 'error')
+        }
         return
+      }
       case 'open': {
         if (!(await this.confirmLeave())) return
         const file = await bridge.openFileDialog()
@@ -327,11 +348,15 @@ export class App {
 
   /** Shows `content` as the saved state of `path`. `keepView` keeps the scroll position and caret (a reload). */
   private load(path: string | null, content: string, keepView = false): void {
+    if (!keepView && this.path && this.path !== path) this.captureViewState()
+    window.clearTimeout(this.viewStateTimer)
+    this.viewStateTimer = 0
     window.clearTimeout(this.refreshTimer)
     window.clearTimeout(this.autoSaveTimer)
     window.clearTimeout(this.draftTimer)
     this.cancelCleanCheck()
     this.editVersion++
+    const token = ++this.scrollRestoreToken
     const scrollTop = this.scroller.scrollTop
     const caret = this.wysiwyg.view().state.selection.from
     this.path = path
@@ -347,8 +372,31 @@ export class App {
     if (path) this.rememberRecent(path)
     this.setDirty(false)
     this.sidebar.setActiveFile(path)
-    if (keepView && this.mode === 'wysiwyg') this.wysiwyg.setCursor(caret)
-    this.scroller.scrollTop = keepView ? scrollTop : 0
+    if (keepView) {
+      if (this.mode === 'wysiwyg') this.wysiwyg.setCursor(caret)
+      this.scroller.scrollTop = scrollTop
+    } else if (path) {
+      const saved = getViewState(path)
+      if (saved) {
+        if (this.mode === 'source' && this.source) this.source.setCaret(saved.caret)
+        else this.wysiwyg.setCursor(saved.caret)
+        this.scroller.scrollTop = saved.scrollTop
+        if (saved.scrollTop > 0) {
+          requestAnimationFrame(() => {
+            if (this.scrollRestoreToken === token && this.path === path) {
+              this.scroller.scrollTop = saved.scrollTop
+              this.updateActiveHeading()
+            }
+          })
+        }
+      } else {
+        this.scroller.scrollTop = 0
+      }
+      if (this.mode === 'source' && this.source) this.source.focus()
+      else this.wysiwyg.focus()
+    } else {
+      this.scroller.scrollTop = 0
+    }
     this.refreshDerived()
     if (this.findBar.isOpen()) this.closeFindBar()
   }
@@ -449,6 +497,7 @@ export class App {
   }
 
   private async openSearchHit(hit: SearchHit, query: string): Promise<void> {
+    this.scrollRestoreToken++
     await this.openPath(hit.path)
     // Line 0 is a match on the file name: opening the file is all there is to do.
     if (this.path !== hit.path || hit.line === 0) return
@@ -561,6 +610,21 @@ export class App {
     }
     window.clearTimeout(this.draftTimer)
     this.draftTimer = window.setTimeout(() => this.writeDraft(), 2000)
+    if (this.mode === 'source') this.scheduleViewStateSave()
+  }
+
+  private captureViewState(): void {
+    window.clearTimeout(this.viewStateTimer)
+    this.viewStateTimer = 0
+    if (!this.path) return
+    const caret = this.mode === 'source' && this.source ? this.source.getCaret() : this.wysiwyg.getCaret()
+    saveViewState(this.path, { scrollTop: Math.round(this.scroller.scrollTop), caret })
+  }
+
+  private scheduleViewStateSave(): void {
+    if (!this.path) return
+    window.clearTimeout(this.viewStateTimer)
+    this.viewStateTimer = window.setTimeout(() => this.captureViewState(), 250)
   }
 
   private cancelCleanCheck(): void {
@@ -654,7 +718,9 @@ export class App {
         return
       }
       try {
-        this.path = await bridge.renameFile(this.path, next)
+        const oldPath = this.path
+        this.path = await bridge.renameFile(oldPath, next)
+        moveViewState(oldPath, this.path)
         this.setDirty(this.dirty)
         this.rememberRecent(this.path)
         this.sidebar.setActiveFile(this.path)
@@ -668,7 +734,7 @@ export class App {
       if (event.key === 'Enter' || event.key === 'Escape') {
         event.preventDefault()
         void finish(event.key === 'Enter')
-        this.wysiwyg.focus()
+        this.activeEditor().focus()
       }
     }
     const onBlur = () => void finish(true)
@@ -709,6 +775,7 @@ export class App {
   }
 
   private revealHeading(index: number): void {
+    this.scrollRestoreToken++
     if (this.mode === 'source' && this.source) {
       const heading = extractHeadings(this.source.getMarkdown())[index]
       if (heading) this.source.revealLine(heading.line)
@@ -766,6 +833,7 @@ export class App {
   // ------------------------------------------------------------ view modes
 
   private async setMode(mode: Mode): Promise<void> {
+    this.scrollRestoreToken++
     this.targetMode = mode
     if (mode === this.mode) return
     if (mode === 'source') {
@@ -1036,7 +1104,15 @@ export class App {
   // --------------------------------------------------------------------- UI
 
   private bindUi(): void {
-    this.scroller.addEventListener('scroll', () => this.updateActiveHeading(), { passive: true })
+    this.scroller.addEventListener(
+      'scroll',
+      () => {
+        this.updateActiveHeading()
+        this.scheduleViewStateSave()
+      },
+      { passive: true }
+    )
+    this.scroller.addEventListener('wheel', () => this.scrollRestoreToken++, { passive: true })
     $('#toggle-sidebar').addEventListener('click', () => this.run('toggle-sidebar'))
     $('#toggle-mode').addEventListener('click', () => this.run('toggle-source'))
     // A browser tab cannot float above other windows.
@@ -1052,6 +1128,7 @@ export class App {
 
     // Clicking below the last block puts the caret at the end, like a page.
     this.scroller.addEventListener('mousedown', (event) => {
+      this.scrollRestoreToken++
       if ((event.target === this.scroller || event.target === this.writeEl) && this.mode === 'wysiwyg') {
         event.preventDefault()
         this.wysiwyg.focusEnd()
@@ -1078,11 +1155,16 @@ export class App {
     // The status bar fades in on mouse movement and hides while typing.
     window.addEventListener('mousemove', () => this.revealFooter(), { passive: true })
     this.footer.addEventListener('mouseenter', () => window.clearTimeout(this.footerTimer))
-    window.addEventListener('focus', () => this.root.classList.remove('window-blurred'))
+    window.addEventListener('focus', () => {
+      this.root.classList.remove('window-blurred')
+      if (this.mode === 'wysiwyg' && document.activeElement === this.wysiwyg.view().dom) this.wysiwyg.focus()
+    })
     window.addEventListener('blur', () => {
       this.root.classList.add('window-blurred')
+      this.captureViewState()
       this.flushAutoSave()
     })
+    window.addEventListener('beforeunload', () => this.captureViewState())
     window.addEventListener('storage', (event) => {
       if (event.key !== PREFS_KEY) return
       const prevAutoSave = this.prefs.autoSave

@@ -1810,6 +1810,94 @@ try {
       await unpin()
     }
   })
+
+  console.log('U. 顺手体验 (docs/optimization-plan.md v0.3 Step A)')
+  await test('U1', '在当前文件夹和选中子文件夹中快速新建并重命名', async () => {
+    const newDir = join(docs, 'quick-new')
+    await mkdir(join(newDir, 'notes'), { recursive: true })
+    await writeFile(join(newDir, 'existing.md'), '# Existing\n')
+    await writeFile(join(newDir, 'notes', 'child.md'), '# Child\n')
+    await app.answer('open', newDir)
+    await app.menu('open-folder')
+    await app.answer('open', null)
+    await sleep(350)
+    expect(await visible('.sidebar-new-button'), 'sidebar + button hidden')
+    await app.click('.sidebar-new-button')
+    expect(await waitFor(async () => existsSync(join(newDir, '未命名.md'))), '未命名.md not created')
+    if ((await app.main(`return process.platform`)) === 'darwin') {
+      expect(await waitFor(async () => q(`document.querySelector('#title').isContentEditable`)), 'title not renaming')
+      await app.type('draft-one')
+      await app.key('Enter')
+      expect(await waitFor(async () => existsSync(join(newDir, 'draft-one.md'))), 'draft-one.md not renamed')
+      expect((await title()) === 'draft-one.md', `title ${await title()}`)
+    }
+    await app.menu('new')
+    expect(await waitFor(async () => existsSync(join(newDir, '未命名.md'))), 'second 未命名.md not created')
+    if (await q(`document.querySelector('#title').isContentEditable`)) await app.key('Escape')
+    await app.menu('new')
+    expect(await waitFor(async () => existsSync(join(newDir, '未命名 2.md'))), '未命名 2.md not created')
+    if (await q(`document.querySelector('#title').isContentEditable`)) await app.key('Escape')
+    await app.click('.sidebar-button[data-view="tree"]')
+    await app.click('.tree-row[data-kind="folder"]', 'notes')
+    await app.menu('new')
+    expect(await waitFor(async () => existsSync(join(newDir, 'notes', '未命名.md'))), 'subfolder 未命名.md not created')
+    if (await q(`document.querySelector('#title').isContentEditable`)) await app.key('Escape')
+  })
+  await test('U2', '重启后恢复上次打开的文件、滚动位置和光标位置', async () => {
+    const longPath = await fixture('# Top\n\n' + Array.from({ length: 60 }, (_, i) => `Paragraph number ${i}.`).join('\n\n') + '\n', 'restore-pos.md')
+    const first = await launch({ port: 9241, prefs: { autoSave: false } })
+    let savedScroll = 0
+    try {
+      await first.open(longPath)
+      expect(await waitFor(async () => (await first.page(`return document.querySelector('#title').textContent`)) === 'restore-pos.md'), 'file not opened')
+      await first.clickText('Paragraph number 35', 5)
+      await first.page(`document.querySelector('#scroller').scrollTop = 500; return true`)
+      await sleep(400)
+      savedScroll = await first.page(`return Math.round(document.querySelector('#scroller').scrollTop)`)
+      expect(savedScroll > 100, `initial scroll ${savedScroll}`)
+      await first.main(`win.close(); return true`)
+      expect(await waitFor(async () => (await first.main(`return electron.BrowserWindow.getAllWindows().length`).catch(() => 0)) === 0), 'window did not close')
+    } finally {
+      await first.close()
+    }
+    const second = await launch({ port: 9241, profile: first.profile })
+    try {
+      expect(await waitFor(async () => (await second.page(`return document.querySelector('#title').textContent`)) === 'restore-pos.md', 5000), 'last file not restored')
+      await sleep(300)
+      const restored = await second.page(`return { scroll: Math.round(document.querySelector('#scroller').scrollTop), caret: getSelection().anchorNode?.parentElement?.closest('p')?.textContent ?? '' }`)
+      expect(Math.abs(restored.scroll - savedScroll) <= 25, `restored scroll ${restored.scroll} vs ${savedScroll}`)
+      expect(restored.caret.includes('Paragraph number 35'), `restored caret ${JSON.stringify(restored.caret)}`)
+    } finally {
+      await second.close()
+    }
+    await rm(longPath)
+    const third = await launch({ port: 9241, profile: first.profile })
+    try {
+      await sleep(400)
+      expect((await third.page(`return document.querySelector('#title').textContent`)) === '未命名', 'missing file did not fallback to untitled')
+      expect((await third.page(`return document.querySelector('#write .ProseMirror').textContent`)) === '', 'editor not empty on missing file')
+    } finally {
+      await third.close()
+    }
+  })
+  await test('U3', '重启后记住窗口大小', async () => {
+    const first = await launch({ port: 9241, size: '' })
+    try {
+      await first.main(`win.setSize(920, 660); return true`)
+      await sleep(450)
+      await first.main(`win.close(); return true`)
+      expect(await waitFor(async () => (await first.main(`return electron.BrowserWindow.getAllWindows().length`).catch(() => 0)) === 0), 'window did not close')
+    } finally {
+      await first.close()
+    }
+    const second = await launch({ port: 9241, size: '', profile: first.profile })
+    try {
+      const got = await second.main(`return win.getSize()`)
+      expect(Math.abs(got[0] - 920) <= 2 && Math.abs(got[1] - 660) <= 2, `size ${JSON.stringify(got)}`)
+    } finally {
+      await second.close()
+    }
+  })
 } finally {
   const errors = app.logs
     .join('')

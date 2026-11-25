@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, symlink, utimes, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { clearTreeCache, readTree, searchFolder } from '../../src/main/files.ts'
+import { clearTreeCache, createUntitledFile, readTree, searchFolder } from '../../src/main/files.ts'
 
 test('readTree ignores hidden/ignored dirs, skips broken symlinks, and sorts numerically', async () => {
   clearTreeCache()
@@ -78,6 +78,23 @@ test('searchFolder matches plain text, cross-line phrases, multi-word queries, a
 
     const fileHits = await searchFolder(dir, 'project notes')
     assert.deepEqual(fileHits, [{ path: join(dir, 'Project Notes.md'), line: 0, text: '' }])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('createUntitledFile generates sequential and collision-free filenames', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'm-typora-newfile-'))
+  try {
+    const first = await createUntitledFile(dir)
+    const second = await createUntitledFile(dir)
+    const third = await createUntitledFile(dir)
+    assert.equal(first, join(dir, '未命名.md'))
+    assert.equal(second, join(dir, '未命名 2.md'))
+    assert.equal(third, join(dir, '未命名 3.md'))
+
+    const parallel = await Promise.all([createUntitledFile(dir), createUntitledFile(dir), createUntitledFile(dir)])
+    assert.equal(new Set(parallel).size, 3)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

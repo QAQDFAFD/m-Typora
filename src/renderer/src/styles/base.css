@@ -252,6 +252,7 @@ svg {
 }
 
 .sidebar-header {
+  position: relative;
   flex: none;
   height: 26px;
   display: flex;
@@ -259,6 +260,15 @@ svg {
   justify-content: center;
   font-size: 15px;
   color: var(--sidebar-title-color);
+}
+
+.sidebar-new-button {
+  position: absolute;
+  right: 8px;
+}
+
+.sidebar-new-button[hidden] {
+  display: none;
 }
 
 .sidebar-body {
@@ -415,6 +425,7 @@ svg {
 }
 
 .tree-row:hover,
+.tree-row.selected,
 .outline-item:hover {
   background: var(--item-hover-bg-color);
 }

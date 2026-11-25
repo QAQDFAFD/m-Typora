@@ -73,6 +73,22 @@ export async function readTree(root: string, depth = 0): Promise<TreeNode[]> {
   return [...folders.sort(byName), ...files.sort(byName)]
 }
 
+/** Atomically creates `未命名.md` (or `未命名 2.md`, ...) inside `folder` and returns its path. */
+export async function createUntitledFile(folder: string): Promise<string> {
+  for (let n = 1; n <= 9999; n++) {
+    const candidate = join(folder, n === 1 ? '未命名.md' : `未命名 ${n}.md`)
+    try {
+      const handle = await open(candidate, 'wx')
+      await handle.close()
+      return candidate
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue
+      throw error
+    }
+  }
+  throw new Error('无法在该文件夹中生成未命名文件名')
+}
+
 async function readHead(path: string): Promise<string> {
   const handle = await open(path, 'r')
   try {

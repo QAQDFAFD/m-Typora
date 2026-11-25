@@ -207,6 +207,10 @@ export class WysiwygEditor {
     view.dispatch(view.state.tr.setSelection(Selection.near($pos)))
   }
 
+  getCaret(): number {
+    return this.view().state.selection.head
+  }
+
   focusStart(): void {
     const view = this.view()
     view.dispatch(view.state.tr.setSelection(Selection.atStart(view.state.doc)))

@@ -229,6 +229,7 @@ export interface MTyporaApi {
   openFileDialog(): Promise<OpenedFile | null>
   openFolderDialog(): Promise<{ root: string; tree: TreeNode[] } | null>
   readFile(path: string): Promise<OpenedFile>
+  createFile(folder: string): Promise<OpenedFile>
   readFolder(root: string): Promise<TreeNode[]>
   searchFolder(root: string, query: string): Promise<SearchHit[]>
   saveFile(path: string | null, content: string, options?: SaveOptions): Promise<SaveResult>

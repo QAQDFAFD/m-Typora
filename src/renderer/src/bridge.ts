@@ -42,6 +42,7 @@ function createWebBridge(): MTyporaApi {
     readFile: async (path) => {
       throw new Error(`Cannot read ${path} in browser mode`)
     },
+    createFile: async () => ({ path: '未命名.md', content: '' }),
     readFolder: async () => [],
     searchFolder: async () => [],
     saveFile: async (path, content) => {

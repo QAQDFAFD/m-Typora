@@ -57,6 +57,15 @@ export class SourceEditor {
     this.view.focus()
   }
 
+  getCaret(): number {
+    return this.view.state.selection.main.head
+  }
+
+  setCaret(pos: number): void {
+    const anchor = Math.max(0, Math.min(pos, this.view.state.doc.length))
+    this.view.dispatch({ selection: { anchor } })
+  }
+
   hasSelection(): boolean {
     return !this.view.state.selection.main.empty
   }

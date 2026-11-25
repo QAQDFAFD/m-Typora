@@ -6,6 +6,7 @@ const api: MTyporaApi = {
   openFileDialog: () => ipcRenderer.invoke('dialog:open-file'),
   openFolderDialog: () => ipcRenderer.invoke('dialog:open-folder'),
   readFile: (path) => ipcRenderer.invoke('fs:read-file', path),
+  createFile: (folder) => ipcRenderer.invoke('fs:create-file', folder),
   readFolder: (root) => ipcRenderer.invoke('fs:read-folder', root),
   searchFolder: (root, query) => ipcRenderer.invoke('fs:search', root, query),
   saveFile: (path, content, options) => ipcRenderer.invoke('fs:save-file', path, content, options ?? {}),

@@ -1,17 +1,18 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen, shell } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { hashText, resolveTarget, withPathLock, writeFileAtomic } from './atomic'
 import { deleteDraft, leftoverDrafts, readDraft, writeDraft, type Draft } from './drafts'
 import { buildMenu, contextMenu, setCustomThemes, syncMenu, titleMenu } from './menu'
-import { readTree, searchFolder } from './files'
+import { createUntitledFile, readTree, searchFolder } from './files'
 import { exportHtml, exportPdf } from './export'
 import { historyFile, listHistory, moveHistory, pruneHistory, readHistory, snapshot } from './history'
 import { uploadImages } from './images'
 import { ensureThemesDir, listCustomThemes } from './themes'
 import { DocumentTracker } from './tracker'
+import { fitWindowBounds, loadSessionState, saveSessionState, saveSessionStateSync, type SessionState } from './window-state'
 import type { HtmlExportOptions, MenuCommand, MenuState, PdfExportOptions, SaveOptions, SaveResult, UploadConfig, UploadFile } from '../shared/api'
 
 const MARKDOWN_FILTERS = [
@@ -40,6 +41,31 @@ const menuStates = new WeakMap<BrowserWindow, MenuState>()
 const pendingOpenPaths: string[] = []
 /** Set while the app quits, so a window that saves before closing lets the quit continue. */
 let quitting = false
+let sessionState: SessionState = {}
+let sessionTimer: NodeJS.Timeout | undefined
+
+const sessionFile = (): string => join(app.getPath('userData'), 'window-state.json')
+
+function isExistingFile(path: string): boolean {
+  try {
+    return statSync(path).isFile()
+  } catch {
+    return false
+  }
+}
+
+function scheduleSessionSave(): void {
+  clearTimeout(sessionTimer)
+  sessionTimer = setTimeout(() => {
+    void saveSessionState(sessionFile(), sessionState).catch(() => {})
+  }, 300)
+}
+
+function flushSessionSave(): void {
+  clearTimeout(sessionTimer)
+  sessionTimer = undefined
+  saveSessionStateSync(sessionFile(), sessionState)
+}
 
 interface WindowState {
   tracker: DocumentTracker
@@ -51,6 +77,8 @@ interface WindowState {
   restore: Draft | null
   /** A file to open once the page has loaded. */
   path?: string
+  /** True while waiting for the initial startup file/draft to finish loading in the renderer. */
+  pendingOpen: boolean
 }
 
 const windowStates = new WeakMap<BrowserWindow, WindowState>()
@@ -97,9 +125,15 @@ function applyAppState(state: MenuState): void {
 }
 
 function createWindow(options: { path?: string; draftId?: string; draft?: Draft } = {}): BrowserWindow {
+  const displays = screen.getAllDisplays().map((display) => display.workArea)
+  let bounds = SMOKE_SIZE
+    ? { width: Number(SMOKE_SIZE[1]), height: Number(SMOKE_SIZE[2]) }
+    : fitWindowBounds(sessionState.bounds, displays)
+  if (!SMOKE_SIZE && BrowserWindow.getAllWindows().length > 0 && bounds.x !== undefined && bounds.y !== undefined) {
+    bounds = fitWindowBounds({ ...bounds, x: bounds.x + 24, y: bounds.y + 24 }, displays)
+  }
   const win = new BrowserWindow({
-    width: SMOKE_SIZE ? Number(SMOKE_SIZE[1]) : 1180,
-    height: SMOKE_SIZE ? Number(SMOKE_SIZE[2]) : 800,
+    ...bounds,
     minWidth: 480,
     minHeight: 360,
     show: false,
@@ -127,18 +161,54 @@ function createWindow(options: { path?: string; draftId?: string; draft?: Draft 
     draftId: options.draftId ?? randomUUID(),
     draftQueue: Promise.resolve(),
     restore: options.draft ?? null,
-    path: options.path
+    path: options.path,
+    pendingOpen: Boolean(options.path || options.draft || SMOKE_FILE)
   }
   windowStates.set(win, state)
 
+  const captureBounds = () => {
+    if (SMOKE_SIZE || win.isDestroyed() || win.isMinimized()) return
+    const normal = win.getNormalBounds()
+    sessionState.bounds = {
+      x: normal.x,
+      y: normal.y,
+      width: normal.width,
+      height: normal.height,
+      maximized: win.isMaximized()
+    }
+  }
+
+  const recordBounds = () => {
+    captureBounds()
+    scheduleSessionSave()
+  }
+
+  const recordClosingWindow = () => {
+    captureBounds()
+    if (!state.pendingOpen && (BrowserWindow.getAllWindows().length <= 1 || BrowserWindow.getFocusedWindow() === win)) {
+      sessionState.lastFile = state.tracker.currentPath()
+    }
+    flushSessionSave()
+  }
+
+  if (!SMOKE_SIZE) {
+    win.on('resize', recordBounds)
+    win.on('move', recordBounds)
+  }
+
   win.once('ready-to-show', () => {
+    if (!SMOKE_SIZE && bounds.maximized && !HEADLESS && !E2E) win.maximize()
     if (E2E) win.showInactive()
     else if (!HEADLESS) win.show()
   })
 
   win.on('focus', () => {
-    const state = menuStates.get(win)
-    if (state) applyAppState(state)
+    const menuState = menuStates.get(win)
+    if (menuState) applyAppState(menuState)
+    if (!state.pendingOpen) {
+      sessionState.lastFile = state.tracker.currentPath()
+      scheduleSessionSave()
+    }
   })
 
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -155,7 +225,10 @@ function createWindow(options: { path?: string; draftId?: string; draft?: Draft 
   })
 
   win.on('close', (event) => {
-    if (!dirtyWindows.has(win)) return
+    if (!dirtyWindows.has(win)) {
+      recordClosingWindow()
+      return
+    }
     event.preventDefault()
     if (autoSaveWindows.has(win)) return sendMenu('save-and-close', win)
     const choice = dialog.showMessageBoxSync(win, {
@@ -169,6 +242,7 @@ function createWindow(options: { path?: string; draftId?: string; draft?: Draft 
     if (choice === 0) sendMenu('save-and-close', win)
     if (choice === 1) {
       dirtyWindows.delete(win)
+      recordClosingWindow()
       win.destroy()
     }
     if (choice === 2) quitting = false
@@ -197,6 +271,7 @@ function createWindow(options: { path?: string; draftId?: string; draft?: Draft 
     if (state.restore) void restoreDraft(win, state)
     const path = state.path ?? SMOKE_FILE
     state.path = undefined
+    if (!state.restore && !path) state.pendingOpen = false
     if (path) win.webContents.send('open-path', path)
     if (SMOKE_FOLDER) win.webContents.send('open-path', SMOKE_FOLDER)
     if (SMOKE_OUTPUT) captureAndQuit(win, SMOKE_OUTPUT)
@@ -213,6 +288,7 @@ function createWindow(options: { path?: string; draftId?: string; draft?: Draft 
 async function restoreDraft(win: BrowserWindow, state: WindowState): Promise<void> {
   const draft = state.restore
   state.restore = null
+  state.pendingOpen = false
   if (!draft) return
   let diskChanged = false
   if (draft.path && draft.baseHash) {
@@ -272,10 +348,21 @@ function registerIpc(): void {
 
   // Reading a file makes it the window's document: its text is what later saves compare against.
   ipcMain.handle('fs:read-file', async (event, path: string) => {
+    const state = stateOf(senderWindow(event))
+    state.pendingOpen = false
     const content = await readFile(path, 'utf8')
-    stateOf(senderWindow(event)).tracker.setKnown(path, content)
+    state.tracker.setKnown(path, content)
     app.addRecentDocument(path)
     return { path, content }
+  })
+
+  ipcMain.handle('fs:create-file', async (event, folder: string) => {
+    const state = stateOf(senderWindow(event))
+    state.pendingOpen = false
+    const path = await createUntitledFile(folder)
+    state.tracker.setKnown(path, '')
+    app.addRecentDocument(path)
+    return { path, content: '' }
   })
 
   ipcMain.handle('fs:read-folder', (_event, root: string) => readTree(root))
@@ -416,8 +503,16 @@ function registerIpc(): void {
 
   ipcMain.on('window:set-title', (event, title: string, edited: boolean, path: string | null) => {
     const win = senderWindow(event)
+    const state = stateOf(win)
     // An untitled document: stop watching the file shown before.
-    if (!path) stateOf(win).tracker.forget()
+    if (!path) state.tracker.forget()
+    if (path !== null) state.pendingOpen = false
+    if (BrowserWindow.getFocusedWindow() === win || BrowserWindow.getAllWindows().length === 1) {
+      if (path !== null || !state.pendingOpen) {
+        sessionState.lastFile = path
+        scheduleSessionSave()
+      }
+    }
     if (process.platform === 'darwin') {
       win.setTitle(title)
       win.setDocumentEdited(edited)
@@ -470,6 +565,7 @@ app.on('second-instance', (_event, argv, cwd) => {
 
 app.on('before-quit', () => {
   quitting = true
+  flushSessionSave()
 })
 
 // macOS delivers files opened from Finder through this event, possibly before ready.
@@ -483,6 +579,7 @@ app.whenReady().then(async () => {
   if (!singleInstance) return
   app.setName('m-typora')
   app.setAboutPanelOptions({ applicationName: 'm-typora', applicationVersion: app.getVersion() })
+  sessionState = loadSessionState(sessionFile())
   registerIpc()
   buildMenu({ newWindow: () => createWindow(), send: sendMenu }, await listCustomThemes().catch(() => []))
 
@@ -494,7 +591,10 @@ app.whenReady().then(async () => {
   const recovered = new Set(drafts.map(({ draft }) => draft.path && resolve(draft.path)))
   const paths = (pendingOpenPaths.length > 0 ? pendingOpenPaths : argvPath ? [argvPath] : []).filter((path) => !recovered.has(resolve(path)))
   for (const path of paths) createWindow({ path })
-  if (BrowserWindow.getAllWindows().length === 0) createWindow()
+  if (BrowserWindow.getAllWindows().length === 0) {
+    const candidate = !SMOKE_FILE && !SMOKE_OUTPUT ? sessionState.lastFile : null
+    createWindow(candidate && isExistingFile(candidate) ? { path: candidate } : {})
+  }
   void pruneHistory().catch((error) => console.error('pruning history failed', error))
 
   app.on('activate', () => {

@@ -84,6 +84,7 @@ export class Sidebar {
   private tree: TreeNode[] = []
   private headings: Heading[] = []
   private activeFile: string | null = null
+  private selectedFolder: string | null = null
   private activeHeading = -1
   private collapsedFolders = new Set<string>()
   private collapsedHeadings = new Set<number>()
@@ -93,11 +94,15 @@ export class Sidebar {
   private searchSeq = 0
 
   private titleEl: HTMLElement
+  private newButton: HTMLButtonElement
   private body: HTMLElement
 
   constructor(private el: HTMLElement, private handlers: SidebarHandlers) {
     el.innerHTML = `
-      <div class="sidebar-header"><span class="sidebar-title"></span></div>
+      <div class="sidebar-header">
+        <span class="sidebar-title"></span>
+        <button class="sidebar-button sidebar-new-button" data-action="new" title="在当前文件夹新建文件 (⌘N)" aria-label="在当前文件夹新建文件" hidden>${ICONS.plus}</button>
+      </div>
       <div class="sidebar-body"></div>
       <div class="sidebar-footer">
         <button class="sidebar-button" data-action="new" title="新建文件">${ICONS.plus}</button>
@@ -108,8 +113,10 @@ export class Sidebar {
         <button class="sidebar-button" data-view="search" title="搜索 (⇧⌘F)">${ICONS.search}</button>
       </div>`
     this.titleEl = el.querySelector('.sidebar-title')!
+    this.newButton = el.querySelector('.sidebar-new-button')!
     this.body = el.querySelector('.sidebar-body')!
 
+    this.newButton.addEventListener('click', () => this.handlers.onNewFile())
     el.querySelector('.sidebar-footer')!.addEventListener('click', (event) => {
       const button = (event.target as HTMLElement).closest<HTMLElement>('button')
       if (!button) return
@@ -134,8 +141,13 @@ export class Sidebar {
   }
 
   setFolder(root: string, tree: TreeNode[]): void {
+    const rootChanged = root !== this.root
     this.root = root
     this.tree = tree
+    this.newButton.hidden = !this.root
+    if (rootChanged || (this.selectedFolder && !this.folderExists(this.selectedFolder, tree))) {
+      this.selectedFolder = null
+    }
     if (this.view === 'articles' || this.view === 'tree') this.render()
   }
 
@@ -145,6 +157,28 @@ export class Sidebar {
 
   folder(): string | null {
     return this.root
+  }
+
+  /** Where quick-new creates a file: the selected subfolder if still present, else the opened folder. */
+  targetFolder(): string | null {
+    return this.selectedFolder && this.folderExists(this.selectedFolder) ? this.selectedFolder : this.root
+  }
+
+  /** Expands `path` and its ancestor folders in the tree so newly created files stay visible. */
+  expandFolder(path: string): void {
+    for (const folder of [...this.collapsedFolders]) {
+      if (path === folder || path.startsWith(`${folder}/`) || path.startsWith(`${folder}\\`)) {
+        this.collapsedFolders.delete(folder)
+      }
+    }
+  }
+
+  private folderExists(path: string, nodes: TreeNode[] = this.tree): boolean {
+    for (const node of nodes) {
+      if (!node.children) continue
+      if (node.path === path || this.folderExists(path, node.children)) return true
+    }
+    return false
   }
 
   allFiles(): string[] {
@@ -235,7 +269,8 @@ export class Sidebar {
       const row = document.createElement('div')
       const isFolder = Boolean(node.children)
       const collapsed = this.collapsedFolders.has(node.path)
-      row.className = `tree-row${node.path === this.activeFile ? ' active' : ''}`
+      const selected = isFolder && node.path === this.selectedFolder
+      row.className = `tree-row${node.path === this.activeFile ? ' active' : ''}${selected ? ' selected' : ''}`
       row.dataset.path = node.path
       row.dataset.kind = isFolder ? 'folder' : 'file'
       row.style.paddingLeft = `${8 + depth * 16}px`
@@ -354,10 +389,12 @@ export class Sidebar {
     if (!node) return
     const path = node.dataset.path!
     if (node.dataset.kind === 'folder') {
+      this.selectedFolder = path
       if (this.collapsedFolders.has(path)) this.collapsedFolders.delete(path)
       else this.collapsedFolders.add(path)
       this.renderTree()
     } else {
+      this.selectedFolder = null
       this.handlers.onOpenFile(path)
     }
   }
