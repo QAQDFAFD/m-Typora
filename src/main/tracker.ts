@@ -16,6 +16,7 @@ interface Notify {
  * anything else — sync clients, git, other editors.
  */
 export class DocumentTracker {
+  private notify: Notify
   private path: string | null = null
   /** Hash of the text this window last read from or wrote to `path`. */
   private hash: string | null = null
@@ -27,7 +28,9 @@ export class DocumentTracker {
   private fileTimer: NodeJS.Timeout | undefined
   private folderTimer: NodeJS.Timeout | undefined
 
-  constructor(private notify: Notify) {}
+  constructor(notify: Notify) {
+    this.notify = notify
+  }
 
   currentPath(): string | null {
     return this.path
@@ -119,15 +122,21 @@ export class DocumentTracker {
   }
 
   private async check(path: string): Promise<void> {
-    const text = await readFile(path, 'utf8').catch(() => null)
-    if (path !== this.path) return
-    if (text === null) {
-      if (!this.missing) {
-        this.missing = true
-        this.notify.fileChanged(path, 'deleted')
+    let text: string
+    try {
+      text = await readFile(path, 'utf8')
+    } catch (error) {
+      if (path !== this.path) return
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === 'ENOENT' || code === 'ENOTDIR') {
+        if (!this.missing) {
+          this.missing = true
+          this.notify.fileChanged(path, 'deleted')
+        }
       }
       return
     }
+    if (path !== this.path) return
     const hash = hashText(text)
     if (this.missing) {
       this.missing = false

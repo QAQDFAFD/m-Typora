@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { basename, dirname, extname, join, resolve } from 'node:path'
-import { hashText, resolveTarget, writeFileAtomic } from './atomic'
+import { hashText, resolveTarget, withPathLock, writeFileAtomic } from './atomic'
 import { deleteDraft, leftoverDrafts, readDraft, writeDraft, type Draft } from './drafts'
 import { buildMenu, contextMenu, setCustomThemes, syncMenu, titleMenu } from './menu'
 import { readTree, searchFolder } from './files'
@@ -62,12 +62,14 @@ function stateOf(win: BrowserWindow): WindowState {
 }
 
 /** The window (other than `except`) whose document is `path`. */
-function windowShowing(path: string, except?: BrowserWindow): BrowserWindow | undefined {
-  const wanted = resolve(path)
-  return BrowserWindow.getAllWindows().find((win) => {
-    const current = win !== except && windowStates.get(win)?.tracker.currentPath()
-    return current ? resolve(current) === wanted : false
-  })
+async function windowShowing(path: string, except?: BrowserWindow): Promise<BrowserWindow | undefined> {
+  const wanted = await resolveTarget(resolve(path))
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win === except) continue
+    const current = windowStates.get(win)?.tracker.currentPath()
+    if (current && (await resolveTarget(resolve(current))) === wanted) return win
+  }
+  return undefined
 }
 
 function focusWindow(win: BrowserWindow): void {
@@ -77,8 +79,8 @@ function focusWindow(win: BrowserWindow): void {
 }
 
 /** Opens a file from Finder / Explorer / the command line, reusing a window that already shows it. */
-function openInWindow(path: string): void {
-  const existing = windowShowing(path)
+async function openInWindow(path: string): Promise<void> {
+  const existing = await windowShowing(path)
   if (existing) focusWindow(existing)
   else createWindow({ path })
 }
@@ -107,7 +109,7 @@ function createWindow(options: { path?: string; draftId?: string; draft?: Draft 
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
       spellcheck: false,
       // Tests keep running at full speed while the user works in other windows.
       backgroundThrottling: !E2E
@@ -140,7 +142,7 @@ function createWindow(options: { path?: string; draftId?: string; draft?: Draft 
   })
 
   win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
+    if (/^(https?|mailto):/i.test(url)) shell.openExternal(url)
     return { action: 'deny' }
   })
 
@@ -148,7 +150,7 @@ function createWindow(options: { path?: string; draftId?: string; draft?: Draft 
   win.webContents.on('will-navigate', (event, url) => {
     if (url !== win.webContents.getURL()) {
       event.preventDefault()
-      if (/^https?:/i.test(url)) shell.openExternal(url)
+      if (/^(https?|mailto):/i.test(url)) shell.openExternal(url)
     }
   })
 
@@ -248,7 +250,7 @@ function registerIpc(): void {
     })
     if (result.canceled || result.filePaths.length === 0) return null
     const path = result.filePaths[0]
-    const existing = windowShowing(path, win)
+    const existing = await windowShowing(path, win)
     if (existing) {
       focusWindow(existing)
       return null
@@ -292,18 +294,21 @@ function registerIpc(): void {
       if (result.canceled || !result.filePath) return null
       target = result.filePath
     }
-    const disk = await readFile(target, 'utf8').catch(() => null)
-    if (disk !== null) {
-      // Text this window never saw came from somewhere else (a sync client, git, another editor):
-      // never overwrite it unless the user chose to. A save dialog has already asked.
-      const fromOutside = tracker.changedOnDisk(target, disk)
-      if (fromOutside && path && !options.force) return { conflict: true }
-      if (disk !== content) await snapshot(target, disk, fromOutside).catch((error) => console.error('history snapshot failed', error))
-    }
-    await writeFileAtomic(target, content)
-    tracker.setKnown(target, content)
-    app.addRecentDocument(target)
-    return { path: target }
+    const lockKey = await resolveTarget(resolve(target))
+    return withPathLock(lockKey, async () => {
+      const disk = await readFile(target, 'utf8').catch(() => null)
+      if (disk !== null) {
+        // Text this window never saw came from somewhere else (a sync client, git, another editor):
+        // never overwrite it unless the user chose to. A save dialog has already asked.
+        const fromOutside = tracker.changedOnDisk(target, disk)
+        if (fromOutside && path && !options.force) return { conflict: true }
+        if (disk !== content) await snapshot(target, disk, fromOutside).catch((error) => console.error('history snapshot failed', error))
+      }
+      await writeFileAtomic(target, content)
+      tracker.setKnown(target, content)
+      app.addRecentDocument(target)
+      return { path: target }
+    })
   })
 
   ipcMain.handle('fs:rename', async (event, path: string, newName: string) => {
@@ -323,8 +328,8 @@ function registerIpc(): void {
   ipcMain.handle('fs:save-asset', async (_event, docPath: string, fileName: string, data: ArrayBuffer) => {
     const assetsDir = join(dirname(docPath), 'assets')
     await mkdir(assetsDir, { recursive: true })
-    const safeName = `${Date.now()}-${basename(fileName).replace(/[^\w.-]+/g, '_')}`
-    await writeFile(join(assetsDir, safeName), Buffer.from(data))
+    const safeName = `${Date.now()}-${randomUUID().slice(0, 6)}-${basename(fileName).replace(/[^\w.-]+/g, '_') || 'image.png'}`
+    await writeFileAtomic(join(assetsDir, safeName), Buffer.from(data))
     return `assets/${safeName}`
   })
 
@@ -370,8 +375,8 @@ function registerIpc(): void {
     state.draftQueue = state.draftQueue.then(() => deleteDraft(state.draftId))
   })
 
-  ipcMain.handle('window:focus-open', (event, path: string) => {
-    const existing = windowShowing(path, senderWindow(event))
+  ipcMain.handle('window:focus-open', async (event, path: string) => {
+    const existing = await windowShowing(path, senderWindow(event))
     if (existing) focusWindow(existing)
     return Boolean(existing)
   })
@@ -456,7 +461,7 @@ if (!singleInstance) app.quit()
 
 app.on('second-instance', (_event, argv, cwd) => {
   const paths = argv.slice(1).filter((arg) => MARKDOWN_ARG.test(arg)).map((arg) => resolve(cwd, arg))
-  for (const path of paths) openInWindow(path)
+  for (const path of paths) void openInWindow(path)
   if (paths.length > 0) return
   const win = BrowserWindow.getAllWindows()[0]
   if (win) focusWindow(win)
@@ -470,7 +475,7 @@ app.on('before-quit', () => {
 // macOS delivers files opened from Finder through this event, possibly before ready.
 app.on('open-file', (event, path) => {
   event.preventDefault()
-  if (app.isReady()) openInWindow(path)
+  if (app.isReady()) void openInWindow(path)
   else pendingOpenPaths.push(path)
 })
 

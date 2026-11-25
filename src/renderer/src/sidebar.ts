@@ -90,6 +90,7 @@ export class Sidebar {
   private searchQuery = ''
   private searchHits: SearchHit[] = []
   private searchTimer = 0
+  private searchSeq = 0
 
   private titleEl: HTMLElement
   private body: HTMLElement
@@ -300,7 +301,11 @@ export class Sidebar {
   }
 
   private async runSearch(): Promise<void> {
-    this.searchHits = this.root && this.searchQuery.trim() ? await this.handlers.onSearch(this.searchQuery) : []
+    const seq = ++this.searchSeq
+    const query = this.searchQuery
+    const hits = this.root && query.trim() ? await this.handlers.onSearch(query) : []
+    if (seq !== this.searchSeq) return
+    this.searchHits = hits
     if (this.view === 'search') this.renderSearchResults()
   }
 

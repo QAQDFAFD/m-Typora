@@ -168,6 +168,31 @@ function scanTextblock(block: ProseNode, start: number, constructs: Construct[])
   }
 }
 
+const textblockCache = new WeakMap<ProseNode, Construct[]>()
+
+function shiftRange(range: Range, offset: number): Range {
+  return [range[0] + offset, range[1] + offset]
+}
+
+function shiftConstruct(c: Construct, offset: number): Construct {
+  switch (c.kind) {
+    case 'span':
+      return {
+        ...c,
+        from: c.from + offset,
+        to: c.to + offset,
+        markers: c.markers.map((r) => shiftRange(r, offset)),
+        inner: shiftRange(c.inner, offset)
+      }
+    case 'emoji':
+    case 'html':
+    case 'toc':
+      return { ...c, from: c.from + offset, to: c.to + offset }
+    case 'callout':
+      return c
+  }
+}
+
 function scan(doc: ProseNode): Construct[] {
   const constructs: Construct[] = []
   doc.descendants((node, pos) => {
@@ -189,7 +214,13 @@ function scan(doc: ProseNode): Construct[] {
       }
     }
     if (node.isTextblock && !node.type.spec.code) {
-      scanTextblock(node, pos + 1, constructs)
+      let cached = textblockCache.get(node)
+      if (!cached) {
+        cached = []
+        scanTextblock(node, 0, cached)
+        textblockCache.set(node, cached)
+      }
+      for (const item of cached) constructs.push(shiftConstruct(item, pos + 1))
       return false
     }
     return true

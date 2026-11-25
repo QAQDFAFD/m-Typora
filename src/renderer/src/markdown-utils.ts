@@ -38,6 +38,19 @@ export interface TextStats {
   minutes: number
 }
 
+/** Counts CJK characters individually and other plain text by whitespace-separated words. */
+export function countPlainText(text: string, lines: number, characters = text.replace(/\s/g, '').length): TextStats {
+  const cjk = text.match(/[぀-ヿ㐀-䶿一-鿿가-힯]/g)?.length ?? 0
+  const latin = text.replace(/[぀-ヿ㐀-䶿一-鿿가-힯]/g, ' ').match(/[\p{L}\p{N}]+/gu)?.length ?? 0
+  const words = cjk + latin
+  return {
+    words,
+    characters,
+    lines,
+    minutes: Math.max(1, Math.round(words / 300))
+  }
+}
+
 /** Counts CJK characters individually and other text by whitespace-separated words. */
 export function countText(markdown: string): TextStats {
   const text = markdown
@@ -45,15 +58,11 @@ export function countText(markdown: string): TextStats {
     .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
     .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
     .replace(/[#>*_`~\-|=]+/g, ' ')
-  const cjk = text.match(/[぀-ヿ㐀-䶿一-鿿가-힯]/g)?.length ?? 0
-  const latin = text.replace(/[぀-ヿ㐀-䶿一-鿿가-힯]/g, ' ').match(/[\p{L}\p{N}]+/gu)?.length ?? 0
-  const words = cjk + latin
-  return {
-    words,
-    characters: markdown.replace(/\s/g, '').length,
-    lines: markdown === '' ? 0 : markdown.split('\n').length,
-    minutes: Math.max(1, Math.round(words / 300))
-  }
+  return countPlainText(
+    text,
+    markdown === '' ? 0 : markdown.split('\n').length,
+    markdown.replace(/\s/g, '').length
+  )
 }
 
 export function fileName(path: string | null): string {

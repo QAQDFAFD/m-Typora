@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import type { UploadConfig, UploadFile } from '../shared/api'
@@ -7,17 +7,24 @@ import type { UploadConfig, UploadFile } from '../shared/api'
 const COMMAND_TIMEOUT = 120_000
 
 /** Pasted screenshots only exist in memory; uploaders need a file. */
-async function toPaths(files: UploadFile[]): Promise<string[]> {
-  let dir: string | null = null
-  return Promise.all(
-    files.map(async (file) => {
+async function preparePaths(files: UploadFile[]): Promise<{ paths: string[]; cleanup: () => Promise<void> }> {
+  let dirPromise: Promise<string> | null = null
+  const ensureDir = () => (dirPromise ??= mkdtemp(join(tmpdir(), 'm-typora-upload-')))
+  const paths = await Promise.all(
+    files.map(async (file, index) => {
       if (file.path) return file.path
-      dir ??= await mkdtemp(join(tmpdir(), 'm-typora-upload-'))
-      const target = join(dir, `${Date.now()}-${basename(file.name).replace(/[^\w.-]+/g, '_') || 'image.png'}`)
+      const dir = await ensureDir()
+      const target = join(dir, `${Date.now()}-${index}-${basename(file.name).replace(/[^\w.-]+/g, '_') || 'image.png'}`)
       await writeFile(target, Buffer.from(file.data ?? new ArrayBuffer(0)))
       return target
     })
   )
+  const cleanup = async () => {
+    if (!dirPromise) return
+    const dir = await dirPromise.catch(() => null)
+    if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {})
+  }
+  return { paths, cleanup }
 }
 
 /** PicGo.app's built-in server (PicGo › 设置 › 设置 Server, port 36677 by default). */
@@ -27,9 +34,13 @@ async function uploadWithPicgoApp(paths: string[], port: number): Promise<string
     response = await fetch(`http://127.0.0.1:${port}/upload`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ list: paths })
+      body: JSON.stringify({ list: paths }),
+      signal: AbortSignal.timeout(COMMAND_TIMEOUT)
     })
-  } catch {
+  } catch (error) {
+    if ((error as Error)?.name === 'TimeoutError') {
+      throw new Error(`PicGo 上传超时（${COMMAND_TIMEOUT / 1000} 秒无响应），请在 PicGo 中检查上传状态或网络配置。`)
+    }
     throw new Error(`无法连接 PicGo（端口 ${port}）。请确认 PicGo 正在运行，并在 PicGo 的「设置 › 设置 Server」中打开了 Server，端口与偏好设置中的一致。`)
   }
   const result = (await response.json().catch(() => ({}))) as { success?: boolean; result?: string[]; message?: string; msg?: string }
@@ -68,14 +79,18 @@ function uploadWithCommand(command: string, paths: string[]): Promise<string[]> 
 
 export async function uploadImages(files: UploadFile[], config: UploadConfig): Promise<string[]> {
   if (files.length === 0) return []
-  const paths = await toPaths(files)
-  switch (config.service) {
-    case 'picgo-app':
-      return uploadWithPicgoApp(paths, config.picgoPort)
-    case 'picgo-core':
-      return uploadWithCommand(`${quote(config.picgoPath.trim() || 'picgo')} upload`, paths)
-    case 'custom':
-      if (!config.command.trim()) throw new Error('还没有填写自定义上传命令。')
-      return uploadWithCommand(config.command.trim(), paths)
+  const { paths, cleanup } = await preparePaths(files)
+  try {
+    switch (config.service) {
+      case 'picgo-app':
+        return await uploadWithPicgoApp(paths, config.picgoPort)
+      case 'picgo-core':
+        return await uploadWithCommand(`${quote(config.picgoPath.trim() || 'picgo')} upload`, paths)
+      case 'custom':
+        if (!config.command.trim()) throw new Error('还没有填写自定义上传命令。')
+        return await uploadWithCommand(config.command.trim(), paths)
+    }
+  } finally {
+    await cleanup()
   }
 }

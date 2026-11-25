@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, extname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { writeFileAtomic } from './atomic'
 import type { ExportOptions, HtmlExportOptions, PdfExportOptions, PdfMargin } from '../shared/api'
 
 const IMAGE_TYPES: Record<string, string> = {
@@ -84,7 +85,7 @@ async function embedFonts(html: string): Promise<string> {
 export async function exportHtml(win: BrowserWindow, name: string, html: string, options: HtmlExportOptions): Promise<string | null> {
   const target = await chooseTarget(win, name, options, 'html')
   if (!target) return null
-  await writeFile(target, await embedFonts(await localizeImages(html, target, options.embedImages)), 'utf8')
+  await writeFileAtomic(target, await embedFonts(await localizeImages(html, target, options.embedImages)))
   afterExport(target, options)
   return target
 }
@@ -96,6 +97,10 @@ export async function exportPdf(win: BrowserWindow, name: string, html: string, 
   const dir = await mkdtemp(join(tmpdir(), 'm-typora-pdf-'))
   const page = join(dir, 'export.html')
   const printer = new BrowserWindow({ show: false, width: 900, height: 1200, webPreferences: { sandbox: true, contextIsolation: true } })
+  printer.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  printer.webContents.on('will-navigate', (event, url) => {
+    if (url !== printer.webContents.getURL()) event.preventDefault()
+  })
   try {
     await writeFile(page, html, 'utf8')
     await printer.loadFile(page)
@@ -108,7 +113,7 @@ export async function exportPdf(win: BrowserWindow, name: string, html: string, 
       pageSize: options.pageSize,
       margins: { top: margin, bottom: margin, left: margin, right: margin }
     })
-    await writeFile(target, pdf)
+    await writeFileAtomic(target, pdf)
   } finally {
     printer.destroy()
     await rm(dir, { recursive: true, force: true })

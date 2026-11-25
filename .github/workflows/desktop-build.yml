@@ -90,6 +90,8 @@ jobs:
 
       - run: npm run typecheck
 
+      - run: npm run test:unit
+
       - name: Package
         run: npm run dist -- ${{ matrix.platform }}
         env:

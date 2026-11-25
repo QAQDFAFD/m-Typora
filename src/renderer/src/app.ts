@@ -1,18 +1,17 @@
 import type { EditorView } from '@milkdown/kit/prose/view'
-import type { CustomTheme, DraftRestore, ExternalChange, MenuCommand, SearchHit, SidebarView, ThemeId, UploadConfig, UploadFile } from '../../shared/api'
+import type { CustomTheme, DraftRestore, ExternalChange, MenuCommand, MenuState, SearchHit, SidebarView, ThemeId, UploadConfig, UploadFile } from '../../shared/api'
 import { bridge, isDesktop } from './bridge'
-import { buildExportPage, buildPlainHtml } from './export'
 import { FindBar } from './findbar'
 import { FrontMatterBlock, joinFrontMatter, splitFrontMatter } from './front-matter'
 import { HistoryDialog } from './history-dialog'
-import { countText, dirName, extractHeadings, fileName, stripExtension, type Heading } from './markdown-utils'
+import { countText, dirName, extractHeadings, fileName, stripExtension, type Heading, type TextStats } from './markdown-utils'
 import { PreferencesDialog } from './preferences'
 import { NoticeBar } from './notice'
-import { loadPrefs, savePrefs, type Prefs } from './prefs'
+import { loadPrefs, PREFS_KEY, savePrefs, type Prefs } from './prefs'
 import { QuickOpen } from './quick-open'
 import { clearSearch, replaceAll, replaceCurrent, searchStatus, setSearchQuery, stepSearch } from './search-plugin'
 import { Sidebar } from './sidebar'
-import { SourceEditor } from './source'
+import type { SourceEditor } from './source'
 import { WELCOME_MARKDOWN } from './welcome'
 import { WysiwygEditor } from './wysiwyg'
 
@@ -35,11 +34,16 @@ export class App {
   /** A crash-recovery draft of this window exists in the main process. */
   private hasDraft = false
   private mode: Mode = 'wysiwyg'
+  private targetMode: Mode = 'wysiwyg'
   /** Mirrors the main process: this window stays above other apps' windows. */
   private alwaysOnTop = false
   private prefs: Prefs = loadPrefs()
   private customThemes: CustomTheme[] = []
   private customThemeStyle: HTMLStyleElement | null = null
+  private themeMeta = { background: '#ffffff', dark: false }
+  private lastTitleSent: { title: string; edited: boolean; path: string | null } | null = null
+  private lastDirtySent: { dirty: boolean; autoSaveOnClose: boolean } | null = null
+  private lastMenuSent: MenuState | null = null
 
   private root = document.documentElement
   private scroller = $('#scroller')
@@ -51,7 +55,8 @@ export class App {
   private wordCountPopover = $('#word-count-popover')
 
   private wysiwyg: WysiwygEditor
-  private source: SourceEditor
+  private source: SourceEditor | null = null
+  private sourcePromise: Promise<SourceEditor> | null = null
   private frontMatter: FrontMatterBlock
   private sidebar: Sidebar
   private findBar: FindBar
@@ -63,6 +68,9 @@ export class App {
   private refreshTimer = 0
   private autoSaveTimer = 0
   private draftTimer = 0
+  private cleanCheckTimer = 0
+  private cleanCheckIdle = 0
+  private editVersion = 0
   private footerTimer = 0
   private toastTimer = 0
   private pinnedHeading: { index: number; until: number } | null = null
@@ -77,7 +85,6 @@ export class App {
       autoPair: () => this.prefs.autoPair,
       isDark: () => this.isDarkTheme()
     })
-    this.source = new SourceEditor(this.sourceRoot, () => this.onContentChange())
     this.frontMatter = new FrontMatterBlock(
       $('#front-matter'),
       () => this.onContentChange(),
@@ -232,19 +239,19 @@ export class App {
         return
       case 'find':
       case 'replace':
-        if (this.mode === 'source') return void this.source.exec(command)
+        if (this.mode === 'source') return void this.source?.exec(command)
         return this.findBar.open(command === 'replace', this.selectedPlainText())
       case 'find-next':
       case 'find-prev':
-        if (this.mode === 'source') return void this.source.exec(command)
+        if (this.mode === 'source') return void this.source?.exec(command)
         if (!this.findBar.isOpen()) return this.findBar.open(false, this.selectedPlainText())
         stepSearch(this.wysiwyg.view(), command === 'find-next' ? 1 : -1)
         return this.updateFindCount()
       case 'copy-markdown':
-        await navigator.clipboard.writeText(this.mode === 'source' ? this.source.selectedText() : this.wysiwyg.selectionAs().markdown)
+        await navigator.clipboard.writeText(this.mode === 'source' && this.source ? this.source.selectedText() : this.wysiwyg.selectionAs().markdown)
         return
       case 'copy-html':
-        await navigator.clipboard.writeText(this.mode === 'source' ? this.source.selectedText() : this.wysiwyg.selectionAs().html)
+        await navigator.clipboard.writeText(this.mode === 'source' && this.source ? this.source.selectedText() : this.wysiwyg.selectionAs().html)
         return
       case 'front-matter':
         if (this.mode === 'source') return
@@ -255,7 +262,7 @@ export class App {
         return this.frontMatter.focus()
 
       case 'toggle-source':
-        return this.setMode(this.mode === 'source' ? 'wysiwyg' : 'source')
+        return this.setMode(this.targetMode === 'source' ? 'wysiwyg' : 'source')
       case 'toggle-sidebar':
         return this.updatePrefs({ sidebar: !this.prefs.sidebar })
       case 'view-outline':
@@ -299,7 +306,16 @@ export class App {
   }
 
   private activeEditor(): WysiwygEditor | SourceEditor {
-    return this.mode === 'source' ? this.source : this.wysiwyg
+    return this.mode === 'source' && this.source ? this.source : this.wysiwyg
+  }
+
+  private ensureSource(): Promise<SourceEditor> {
+    if (this.source) return Promise.resolve(this.source)
+    this.sourcePromise ??= import('./source').then(({ SourceEditor }) => {
+      this.source = new SourceEditor(this.sourceRoot, () => this.onContentChange())
+      return this.source
+    })
+    return this.sourcePromise
   }
 
   private isTypingInField(): boolean {
@@ -311,6 +327,11 @@ export class App {
 
   /** Shows `content` as the saved state of `path`. `keepView` keeps the scroll position and caret (a reload). */
   private load(path: string | null, content: string, keepView = false): void {
+    window.clearTimeout(this.refreshTimer)
+    window.clearTimeout(this.autoSaveTimer)
+    window.clearTimeout(this.draftTimer)
+    this.cancelCleanCheck()
+    this.editVersion++
     const scrollTop = this.scroller.scrollTop
     const caret = this.wysiwyg.view().state.selection.from
     this.path = path
@@ -320,7 +341,7 @@ export class App {
     const { yaml, body } = splitFrontMatter(content)
     this.frontMatter.set(yaml)
     this.wysiwyg.setMarkdown(body, true)
-    if (this.mode === 'source') this.source.setMarkdown(content)
+    if (this.mode === 'source' && this.source) this.source.setMarkdown(content)
     this.savedText = content
     this.savedNormalized = joinFrontMatter(yaml, this.wysiwyg.getMarkdown())
     if (path) this.rememberRecent(path)
@@ -335,7 +356,7 @@ export class App {
   /** Replaces the text as an ordinary (undoable) edit: a restored version or recovered draft. */
   private replaceContent(markdown: string): void {
     const { yaml, body } = splitFrontMatter(markdown)
-    if (this.mode === 'source') {
+    if (this.mode === 'source' && this.source) {
       this.source.setMarkdown(markdown)
     } else {
       this.frontMatter.set(yaml)
@@ -367,7 +388,7 @@ export class App {
     }
     this.missing = false
     this.notice.hide('deleted')
-    if (change === 'restored') return this.onContentChange()
+    if (change === 'restored') return this.onContentChange(true)
     if (!this.dirty) return void this.reloadFromDisk()
     this.showConflict()
   }
@@ -431,7 +452,7 @@ export class App {
     await this.openPath(hit.path)
     // Line 0 is a match on the file name: opening the file is all there is to do.
     if (this.path !== hit.path || hit.line === 0) return
-    if (this.mode === 'source') return this.source.revealLine(hit.line)
+    if (this.mode === 'source' && this.source) return this.source.revealLine(hit.line)
     // Words searched for separately are highlighted by the longest one.
     const phrase = query.trim()
     const needle = hit.text.toLowerCase().includes(phrase.toLowerCase())
@@ -456,6 +477,7 @@ export class App {
 
   /** Returns false when the user cancels; saves or discards otherwise. */
   private async confirmLeave(): Promise<boolean> {
+    this.verifyClean()
     if (!this.dirty) return true
     const choice = await bridge.confirmDiscard(fileName(this.path))
     if (choice === 'cancel') return false
@@ -465,6 +487,7 @@ export class App {
 
   private async save(saveAs: boolean): Promise<boolean> {
     window.clearTimeout(this.autoSaveTimer)
+    const version = this.editVersion
     const content = this.currentMarkdown()
     let result: Awaited<ReturnType<typeof bridge.saveFile>>
     try {
@@ -491,7 +514,7 @@ export class App {
     this.forceNextSave = false
     this.notice.hide()
     // Typing during the save left changes the file does not have yet.
-    this.setDirty(this.currentMarkdown() !== content)
+    this.setDirty(this.editVersion !== version)
     if (this.path) this.rememberRecent(this.path)
     this.sidebar.setActiveFile(this.path)
     if (isNewFile || this.sidebar.getView() === 'articles') void this.refreshFolder()
@@ -499,26 +522,61 @@ export class App {
   }
 
   private currentMarkdown(): string {
-    if (this.mode === 'source') return this.source.getMarkdown()
+    if (this.mode === 'source' && this.source) return this.source.getMarkdown()
     return joinFrontMatter(this.frontMatter.get(), this.wysiwyg.getMarkdown())
   }
 
-  private onContentChange(): void {
-    const markdown = this.currentMarkdown()
-    this.setDirty(this.missing || (markdown !== this.savedText && markdown !== this.savedNormalized))
+  private onContentChange(verifyNow = false): void {
+    this.editVersion++
+    this.setDirty(true)
     this.hideFooterWhileTyping()
     window.clearTimeout(this.refreshTimer)
     this.refreshTimer = window.setTimeout(() => this.refreshDerived(), 150)
     if (this.findBar.isOpen()) this.updateFindCount()
-    if (this.dirty && this.canAutoSave()) {
+    this.cancelCleanCheck()
+    if (verifyNow) {
+      this.verifyClean()
+    } else {
+      const version = this.editVersion
+      this.cleanCheckTimer = window.setTimeout(() => {
+        this.cleanCheckTimer = 0
+        if (version !== this.editVersion) return
+        if (typeof window.requestIdleCallback === 'function') {
+          this.cleanCheckIdle = window.requestIdleCallback(
+            () => {
+              this.cleanCheckIdle = 0
+              if (version === this.editVersion) this.verifyClean()
+            },
+            { timeout: 500 }
+          )
+        } else {
+          this.verifyClean()
+        }
+      }, 350)
+    }
+    if (this.canAutoSave()) {
       window.clearTimeout(this.autoSaveTimer)
       // Checked again when it fires: a notice may have come up in the meantime (a restored draft).
       this.autoSaveTimer = window.setTimeout(() => this.flushAutoSave(), 1000)
     }
-    if (this.dirty) {
-      window.clearTimeout(this.draftTimer)
-      this.draftTimer = window.setTimeout(() => this.writeDraft(), 2000)
+    window.clearTimeout(this.draftTimer)
+    this.draftTimer = window.setTimeout(() => this.writeDraft(), 2000)
+  }
+
+  private cancelCleanCheck(): void {
+    window.clearTimeout(this.cleanCheckTimer)
+    this.cleanCheckTimer = 0
+    if (this.cleanCheckIdle && typeof window.cancelIdleCallback === 'function') {
+      window.cancelIdleCallback(this.cleanCheckIdle)
     }
+    this.cleanCheckIdle = 0
+  }
+
+  private verifyClean(): void {
+    this.cancelCleanCheck()
+    if (!this.dirty || this.missing) return
+    const markdown = this.currentMarkdown()
+    if (markdown === this.savedText || markdown === this.savedNormalized) this.setDirty(false)
   }
 
   /** Auto-save waits while a notice asks for a decision, and never picks a place for a file. */
@@ -539,10 +597,14 @@ export class App {
   private setDirty(dirty: boolean): void {
     this.dirty = dirty
     const name = fileName(this.path)
-    this.titleEl.textContent = name
+    if (this.titleEl.textContent !== name) this.titleEl.textContent = name
     this.root.classList.toggle('doc-edited', dirty)
-    bridge.setTitle(name, dirty, this.path)
+    if (!this.lastTitleSent || this.lastTitleSent.title !== name || this.lastTitleSent.edited !== dirty || this.lastTitleSent.path !== this.path) {
+      this.lastTitleSent = { title: name, edited: dirty, path: this.path }
+      bridge.setTitle(name, dirty, this.path)
+    }
     if (!dirty) {
+      window.clearTimeout(this.autoSaveTimer)
       window.clearTimeout(this.draftTimer)
       if (this.hasDraft) bridge.clearDraft()
       this.hasDraft = false
@@ -553,7 +615,12 @@ export class App {
 
   /** Tells the main process whether closing the window may lose text, or saves it instead. */
   private syncDirtyState(): void {
-    bridge.setDirty(this.dirty, this.dirty && this.canAutoSave())
+    const autoSaveOnClose = this.dirty && this.canAutoSave()
+    if (this.lastDirtySent && this.lastDirtySent.dirty === this.dirty && this.lastDirtySent.autoSaveOnClose === autoSaveOnClose) {
+      return
+    }
+    this.lastDirtySent = { dirty: this.dirty, autoSaveOnClose }
+    bridge.setDirty(this.dirty, autoSaveOnClose)
   }
 
   private rememberRecent(path: string): void {
@@ -612,16 +679,24 @@ export class App {
   // ------------------------------------------------------- outline and stats
 
   private refreshDerived(): void {
-    const body = this.mode === 'source' ? this.source.getMarkdown() : this.wysiwyg.getMarkdown()
-    const stats = countText(splitFrontMatter(body).body)
+    if (this.mode === 'source' && this.source) {
+      const body = this.source.getMarkdown()
+      this.updateWordCount(countText(splitFrontMatter(body).body))
+      this.sidebar.setHeadings(this.currentHeadings(body))
+      return
+    }
+    this.updateWordCount(this.wysiwyg.textStats())
+    this.sidebar.setHeadings(this.currentHeadings(''))
+    this.updateActiveHeading()
+  }
+
+  private updateWordCount(stats: TextStats): void {
     this.wordCountButton.textContent = `${stats.words.toLocaleString()} 词`
     this.wordCountPopover.innerHTML = `
       <div><b>${stats.words.toLocaleString()}</b> 词</div>
       <div><b>${stats.characters.toLocaleString()}</b> 字符</div>
       <div><b>${stats.lines.toLocaleString()}</b> 行</div>
       <div>阅读时间 <b>${stats.minutes}</b> 分钟</div>`
-    this.sidebar.setHeadings(this.currentHeadings(body))
-    this.updateActiveHeading()
   }
 
   private currentHeadings(markdown: string): Heading[] {
@@ -634,7 +709,7 @@ export class App {
   }
 
   private revealHeading(index: number): void {
-    if (this.mode === 'source') {
+    if (this.mode === 'source' && this.source) {
       const heading = extractHeadings(this.source.getMarkdown())[index]
       if (heading) this.source.revealLine(heading.line)
       return
@@ -690,12 +765,15 @@ export class App {
 
   // ------------------------------------------------------------ view modes
 
-  private setMode(mode: Mode): void {
+  private async setMode(mode: Mode): Promise<void> {
+    this.targetMode = mode
     if (mode === this.mode) return
     if (mode === 'source') {
-      this.source.setMarkdown(this.currentMarkdown())
+      const source = await this.ensureSource()
+      if (this.targetMode !== 'source' || this.mode === 'source') return
+      source.setMarkdown(this.currentMarkdown())
       if (this.findBar.isOpen()) this.closeFindBar()
-    } else {
+    } else if (this.source) {
       const { yaml, body } = splitFrontMatter(this.source.getMarkdown())
       this.frontMatter.set(yaml)
       this.wysiwyg.setMarkdown(body, false)
@@ -706,7 +784,7 @@ export class App {
     this.root.classList.toggle('source-mode', mode === 'source')
     this.refreshDerived()
     this.syncMenu()
-    if (mode === 'source') this.source.focus()
+    if (mode === 'source') this.source?.focus()
     else this.wysiwyg.focus()
   }
 
@@ -746,6 +824,10 @@ export class App {
     root.classList.toggle('focus-mode', prefs.focus)
     root.classList.toggle('typewriter-mode', prefs.typewriter)
     root.classList.toggle('statusbar-hidden', !prefs.statusBar)
+    this.themeMeta = {
+      background: getComputedStyle(document.body).backgroundColor,
+      dark: getComputedStyle(this.root).colorScheme.includes('dark')
+    }
     if (this.sidebar.getView() !== prefs.sidebarView) this.sidebar.setView(prefs.sidebarView)
     this.preferences.sync(prefs)
     this.syncMenu()
@@ -768,7 +850,7 @@ export class App {
 
   /** Dark themes (Night, or a custom theme declaring `color-scheme: dark`). */
   private isDarkTheme(): boolean {
-    return getComputedStyle(this.root).colorScheme.includes('dark')
+    return this.themeMeta.dark
   }
 
   private showAlwaysOnTop(on: boolean): void {
@@ -778,7 +860,7 @@ export class App {
   }
 
   private syncMenu(): void {
-    bridge.syncMenu({
+    const next: MenuState = {
       source: this.mode === 'source',
       sidebar: this.prefs.sidebar,
       sidebarView: this.prefs.sidebarView,
@@ -788,9 +870,27 @@ export class App {
       alwaysOnTop: this.alwaysOnTop,
       theme: this.prefs.theme,
       hasFile: this.path !== null,
-      background: getComputedStyle(document.body).backgroundColor,
-      dark: this.isDarkTheme()
-    })
+      background: this.themeMeta.background,
+      dark: this.themeMeta.dark
+    }
+    if (
+      this.lastMenuSent &&
+      this.lastMenuSent.source === next.source &&
+      this.lastMenuSent.sidebar === next.sidebar &&
+      this.lastMenuSent.sidebarView === next.sidebarView &&
+      this.lastMenuSent.focus === next.focus &&
+      this.lastMenuSent.typewriter === next.typewriter &&
+      this.lastMenuSent.statusBar === next.statusBar &&
+      this.lastMenuSent.alwaysOnTop === next.alwaysOnTop &&
+      this.lastMenuSent.theme === next.theme &&
+      this.lastMenuSent.hasFile === next.hasFile &&
+      this.lastMenuSent.background === next.background &&
+      this.lastMenuSent.dark === next.dark
+    ) {
+      return
+    }
+    this.lastMenuSent = next
+    bridge.syncMenu(next)
   }
 
   // ----------------------------------------------------------------- images
@@ -895,9 +995,10 @@ export class App {
   private async exportDocument(kind: 'pdf' | 'html' | 'html-plain'): Promise<void> {
     const title = stripExtension(fileName(this.path))
     // Exports are built from the rendered document, so bring source edits over first.
-    if (this.mode === 'source') this.wysiwyg.setMarkdown(splitFrontMatter(this.source.getMarkdown()).body, false)
+    if (this.mode === 'source' && this.source) this.wysiwyg.setMarkdown(splitFrontMatter(this.source.getMarkdown()).body, false)
     const common = { docPath: this.path, after: this.prefs.afterExport }
     try {
+      const { buildExportPage, buildPlainHtml } = await import('./export')
       if (kind === 'html-plain') {
         await bridge.exportHtml(title, buildPlainHtml(title, this.wysiwyg.toHtml()), { ...common, embedImages: this.prefs.htmlEmbedImages })
         return
@@ -981,6 +1082,17 @@ export class App {
     window.addEventListener('blur', () => {
       this.root.classList.add('window-blurred')
       this.flushAutoSave()
+    })
+    window.addEventListener('storage', (event) => {
+      if (event.key !== PREFS_KEY) return
+      const prevAutoSave = this.prefs.autoSave
+      let next = loadPrefs()
+      if (next.theme.startsWith('custom:') && !this.customThemes.some((theme) => theme.id === next.theme)) {
+        next = { ...next, theme: 'github' }
+      }
+      this.prefs = next
+      this.applyPrefs()
+      if (next.autoSave !== prevAutoSave) this.syncDirtyState()
     })
 
     this.bindSidebarResizer()

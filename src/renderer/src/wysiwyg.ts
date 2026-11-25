@@ -2,7 +2,7 @@ import { Crepe } from '@milkdown/crepe'
 import { editorViewCtx, schemaCtx, serializerCtx, type CmdKey } from '@milkdown/kit/core'
 import { redo, undo } from '@milkdown/kit/prose/history'
 import { DOMSerializer, type Node as ProseNode } from '@milkdown/kit/prose/model'
-import { NodeSelection, Selection, TextSelection } from '@milkdown/kit/prose/state'
+import { NodeSelection, Plugin, PluginKey, Selection, TextSelection } from '@milkdown/kit/prose/state'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import {
   createCodeBlockCommand,
@@ -19,7 +19,7 @@ import {
 } from '@milkdown/kit/preset/commonmark'
 import { insertTableCommand, toggleStrikethroughCommand } from '@milkdown/kit/preset/gfm'
 import { upload, uploadConfig } from '@milkdown/kit/plugin/upload'
-import { callCommand, replaceAll } from '@milkdown/kit/utils'
+import { $prose, callCommand, replaceAll } from '@milkdown/kit/utils'
 import type { MenuCommand } from '../../shared/api'
 import { createAutoPairPlugin } from './auto-pair'
 import { codeLanguagePlugin } from './code-language'
@@ -35,13 +35,14 @@ import { linkEditorPlugin, openLinkEditor } from './link-editor'
 import { linkInputPlugin } from './link-input'
 import { mathInlineEditPlugin } from './math-inline'
 import { configureMarkdown } from './markdown-config'
+import { countPlainText, type TextStats } from './markdown-utils'
 import { searchPlugin } from './search-plugin'
 import { syntaxRevealKeymap, syntaxRevealPlugin } from './syntax-reveal'
 import { createTableToolbar, focusTableNear, runTableCommand, tableInfo, tableKeymap, type TableCommand } from './table-tools'
 
 export interface WysiwygOptions {
   root: HTMLElement
-  onChange(markdown: string): void
+  onChange(): void
   onCursorMove(view: EditorView): void
   /** Turns a markdown image src into something the webview can load. */
   resolveImage(src: string): string
@@ -56,10 +57,13 @@ const BULLET_ICON = '<span class="md-bullet"></span>'
 const CHECKED_ICON = '<span class="md-task-box checked"></span>'
 const UNCHECKED_ICON = '<span class="md-task-box"></span>'
 
+const docChangeKey = new PluginKey('mtypora-doc-change')
+
 /** Typora-style seamless editor built on Milkdown Crepe (ProseMirror + remark). */
 export class WysiwygEditor {
   private crepe: Crepe
   private ready: Promise<unknown>
+  private suppressChange = false
 
   constructor(private options: WysiwygOptions) {
     this.crepe = new Crepe({
@@ -105,6 +109,19 @@ export class WysiwygEditor {
         }
       }))
     })
+    const docChangePlugin = $prose(
+      () =>
+        new Plugin({
+          key: docChangeKey,
+          view: () => ({
+            update: (view, prevState) => {
+              if (!this.suppressChange && !prevState.doc.eq(view.state.doc)) {
+                this.options.onChange()
+              }
+            }
+          })
+        })
+    )
     this.crepe.editor
       .use(upload)
       .use(remarkSizedImages)
@@ -123,9 +140,7 @@ export class WysiwygEditor {
       .use(mathInlineEditPlugin)
       .use(createAutoPairPlugin(options.autoPair))
       .use(createFocusPlugin(options.onCursorMove))
-    this.crepe.on((listener) => {
-      listener.markdownUpdated((_ctx, markdown) => options.onChange(markdown))
-    })
+      .use(docChangePlugin)
     this.ready = this.crepe.create()
   }
 
@@ -139,7 +154,36 @@ export class WysiwygEditor {
 
   /** Replaces the whole document. `resetHistory` is used when opening another file. */
   setMarkdown(markdown: string, resetHistory: boolean): void {
-    this.crepe.editor.action(replaceAll(markdown, resetHistory))
+    this.suppressChange = true
+    try {
+      this.crepe.editor.action(replaceAll(markdown, resetHistory))
+    } finally {
+      this.suppressChange = false
+    }
+  }
+
+  /** Counts words, characters and lines straight from ProseMirror without serializing Markdown. */
+  textStats(): TextStats {
+    const doc = this.view().state.doc
+    if (doc.childCount === 1 && doc.firstChild?.isTextblock && doc.firstChild.content.size === 0) {
+      return countPlainText('', 0, 0)
+    }
+    const parts: string[] = []
+    let chars = 0
+    let lines = 0
+    doc.descendants((node) => {
+      if (!node.isTextblock) return true
+      const text = node.textBetween(0, node.content.size, '\n', ' ')
+      chars += text.replace(/\s/g, '').length
+      if (node.type.name === 'code_block') {
+        lines += text === '' ? 2 : text.split('\n').length + 2
+      } else {
+        parts.push(text)
+        lines += text === '' ? 1 : text.split('\n').length
+      }
+      return false
+    })
+    return countPlainText(parts.join('\n'), lines, chars)
   }
 
   view(): EditorView {

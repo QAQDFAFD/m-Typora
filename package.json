@@ -14,6 +14,7 @@
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "smoke": "electron-vite build && M_TYPORA_SMOKE=out/smoke.png electron .",
+    "test:unit": "node --no-warnings=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/unit/loader.mjs --test \"scripts/unit/*.test.mjs\"",
     "test:e2e": "electron-vite build && node scripts/e2e/run.mjs"
   },
   "dependencies": {

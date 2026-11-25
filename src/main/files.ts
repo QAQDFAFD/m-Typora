@@ -1,31 +1,73 @@
 import { open, readdir, readFile, stat } from 'node:fs/promises'
 import { basename, join, relative } from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
 import type { SearchHit, TreeNode } from '../shared/api'
 
 export const MARKDOWN_FILE = /\.(md|markdown|mdown|txt)$/i
 export const IGNORED_DIRS = new Set(['node_modules', 'dist', 'out', 'build'])
 const MAX_DEPTH = 6
 const EXCERPT_BYTES = 2048
+const TREE_CONCURRENCY = 16
+const EXCERPT_CACHE_LIMIT = 5000
+
+const excerptCache = new Map<string, { mtimeMs: number; size: number; excerpt: string[] }>()
+
+export function clearTreeCache(): void {
+  excerptCache.clear()
+}
+
+function cacheExcerpt(path: string, mtimeMs: number, size: number, excerpt: string[]): void {
+  if (excerptCache.has(path)) excerptCache.delete(path)
+  else if (excerptCache.size >= EXCERPT_CACHE_LIMIT) {
+    const oldest = excerptCache.keys().next().value
+    if (oldest !== undefined) excerptCache.delete(oldest)
+  }
+  excerptCache.set(path, { mtimeMs, size, excerpt })
+}
+
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let next = 0
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++
+      results[index] = await fn(items[index])
+    }
+  })
+  await Promise.all(workers)
+  return results
+}
 
 /** Reads a folder as a tree containing only Markdown files and folders that have some. */
 export async function readTree(root: string, depth = 0): Promise<TreeNode[]> {
   if (depth > MAX_DEPTH) return []
   const entries = await readdir(root, { withFileTypes: true }).catch(() => [])
+  const visible = entries.filter((entry) => !entry.name.startsWith('.'))
   const folders: TreeNode[] = []
   const files: TreeNode[] = []
 
-  for (const entry of entries) {
-    if (entry.name.startsWith('.')) continue
+  await mapLimit(visible, TREE_CONCURRENCY, async (entry) => {
     const path = join(root, entry.name)
     if (entry.isDirectory()) {
-      if (IGNORED_DIRS.has(entry.name)) continue
+      if (IGNORED_DIRS.has(entry.name)) return
       const children = await readTree(path, depth + 1)
       if (children.length > 0) folders.push({ name: entry.name, path, children })
     } else if (MARKDOWN_FILE.test(entry.name)) {
-      const [info, head] = await Promise.all([stat(path), readHead(path)])
-      files.push({ name: entry.name, path, mtime: info.mtimeMs, excerpt: excerptOf(head) })
+      const info = await stat(path).catch(() => null)
+      if (!info || !info.isFile()) return
+      const cached = excerptCache.get(path)
+      let excerpt: string[]
+      if (cached && cached.mtimeMs === info.mtimeMs && cached.size === info.size) {
+        excerpt = cached.excerpt
+      } else {
+        const head = await readHead(path).catch(() => null)
+        if (head === null) return
+        excerpt = excerptOf(head)
+        cacheExcerpt(path, info.mtimeMs, info.size, excerpt)
+      }
+      files.push({ name: entry.name, path, mtime: info.mtimeMs, excerpt })
     }
-  }
+  })
 
   const byName = (a: TreeNode, b: TreeNode) => a.name.localeCompare(b.name, undefined, { numeric: true })
   return [...folders.sort(byName), ...files.sort(byName)]
@@ -36,10 +78,25 @@ async function readHead(path: string): Promise<string> {
   try {
     const buffer = Buffer.alloc(EXCERPT_BYTES)
     const { bytesRead } = await handle.read(buffer, 0, EXCERPT_BYTES, 0)
-    return buffer.subarray(0, bytesRead).toString('utf8')
+    // Decode without flushing so a multi-byte UTF-8 character cut at 2048 bytes is omitted cleanly.
+    return new StringDecoder('utf8').write(buffer.subarray(0, bytesRead))
   } finally {
     await handle.close()
   }
+}
+
+async function collectMarkdownFiles(root: string, depth = 0): Promise<string[]> {
+  if (depth > MAX_DEPTH) return []
+  const entries = await readdir(root, { withFileTypes: true }).catch(() => [])
+  const visible = entries.filter((entry) => !entry.name.startsWith('.'))
+  const nested = await mapLimit(visible, TREE_CONCURRENCY, async (entry) => {
+    const path = join(root, entry.name)
+    if (entry.isDirectory()) {
+      return IGNORED_DIRS.has(entry.name) ? ([] as string[]) : collectMarkdownFiles(path, depth + 1)
+    }
+    return MARKDOWN_FILE.test(entry.name) ? [path] : ([] as string[])
+  })
+  return nested.flat()
 }
 
 /** First two readable lines: front-matter title, headings and paragraph text, with syntax removed. */
@@ -117,45 +174,40 @@ export async function searchFolder(root: string, query: string): Promise<SearchH
     const folded = fold(text)
     return terms.every((term) => folded.includes(term))
   }
-  const files: string[] = []
-  const collect = (nodes: TreeNode[]) => {
-    for (const node of nodes) {
-      if (node.children) collect(node.children)
-      else files.push(node.path)
-    }
-  }
-  collect(await readTree(root))
-
-  const hits: SearchHit[] = []
-  for (const path of files) {
+  const files = await collectMarkdownFiles(root)
+  const perFile = await mapLimit(files, TREE_CONCURRENCY, async (path) => {
     const fileHits: SearchHit[] = []
     if (matches(basename(path).replace(MARKDOWN_FILE, ''))) fileHits.push({ path, line: 0, text: '' })
 
-    const lines = (await readFile(path, 'utf8').catch(() => '')).split(/\r?\n/)
-    let paragraph: Array<{ line: number; text: string; hit: boolean }> = []
-    let inFence = false
-    const flushParagraph = () => {
-      // A phrase split over the lines of one paragraph only matches the joined text.
-      if (paragraph.length > 1 && !paragraph.some((part) => part.hit)) {
-        const joined = paragraph.map((part) => part.text).join(' ')
-        if (matches(joined)) fileHits.push({ path, line: paragraph[0].line, text: excerpt(joined, terms) })
+    const content = await readFile(path, 'utf8').catch(() => null)
+    if (content !== null) {
+      const lines = content.split(/\r?\n/)
+      let paragraph: Array<{ line: number; text: string; hit: boolean }> = []
+      let inFence = false
+      const flushParagraph = () => {
+        // A phrase split over the lines of one paragraph only matches the joined text.
+        if (paragraph.length > 1 && !paragraph.some((part) => part.hit)) {
+          const joined = paragraph.map((part) => part.text).join(' ')
+          if (matches(joined)) fileHits.push({ path, line: paragraph[0].line, text: excerpt(joined, terms) })
+        }
+        paragraph = []
       }
-      paragraph = []
-    }
-    for (let i = 0; i < lines.length && fileHits.length < MAX_HITS_PER_FILE; i++) {
-      const raw = lines[i]
-      if (/^\s*(```|~~~)/.test(raw)) {
-        inFence = !inFence
-        flushParagraph()
+      for (let i = 0; i < lines.length && fileHits.length < MAX_HITS_PER_FILE; i++) {
+        const raw = lines[i]
+        if (/^\s*(```|~~~)/.test(raw)) {
+          inFence = !inFence
+          flushParagraph()
+        }
+        const plain = inFence ? raw.trim() : plainLine(raw)
+        const hit = matches(plain) || matches(raw)
+        if (hit) fileHits.push({ path, line: i + 1, text: excerpt(matches(plain) ? plain : raw.trim(), terms) })
+        if (inFence || !plain) flushParagraph()
+        else paragraph.push({ line: i + 1, text: plain, hit })
       }
-      const plain = inFence ? raw.trim() : plainLine(raw)
-      const hit = matches(plain) || matches(raw)
-      if (hit) fileHits.push({ path, line: i + 1, text: excerpt(matches(plain) ? plain : raw.trim(), terms) })
-      if (inFence || !plain) flushParagraph()
-      else paragraph.push({ line: i + 1, text: plain, hit })
+      flushParagraph()
     }
-    flushParagraph()
-    hits.push(...fileHits.sort((a, b) => a.line - b.line))
-  }
+    return fileHits.sort((a, b) => a.line - b.line)
+  })
+  const hits = perFile.flat()
   return hits.sort((a, b) => relative(root, a.path).localeCompare(relative(root, b.path)) || a.line - b.line)
 }

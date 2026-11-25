@@ -46,7 +46,7 @@ export interface Prefs {
   afterExport: AfterExport
 }
 
-const KEY = 'm-typora:prefs'
+export const PREFS_KEY = 'm-typora:prefs'
 
 const DEFAULTS: Prefs = {
   theme: 'github',
@@ -77,7 +77,7 @@ const DEFAULTS: Prefs = {
 
 export function loadPrefs(): Prefs {
   try {
-    const stored = JSON.parse(localStorage.getItem(KEY) ?? '{}') as Partial<Prefs>
+    const stored = JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}') as Partial<Prefs>
     const prefs = { ...DEFAULTS, ...stored }
     // Drop values written by older versions (e.g. removed theme names). Custom themes are
     // checked once the theme folder has been read (App.start).
@@ -94,7 +94,7 @@ export function loadPrefs(): Prefs {
 
 export function savePrefs(prefs: Prefs): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify(prefs))
+    localStorage.setItem(PREFS_KEY, JSON.stringify(prefs))
   } catch {
     // Preferences are a convenience; ignore storage failures.
   }

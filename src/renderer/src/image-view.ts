@@ -244,15 +244,21 @@ class ImageView implements NodeView {
   }
 }
 
+const imageParagraphCache = new WeakMap<ProseNode, boolean>()
+
 /** A paragraph holding nothing but images (and line breaks): it follows the image alignment. */
 function isImageParagraph(node: ProseNode): boolean {
+  const cached = imageParagraphCache.get(node)
+  if (cached !== undefined) return cached
   let images = 0
   let other = false
   node.forEach((child) => {
     if (child.type.name === 'image') images++
     else if (child.type.name !== 'hardbreak' && !(child.isText && !child.text!.trim())) other = true
   })
-  return images > 0 && !other
+  const result = images > 0 && !other
+  imageParagraphCache.set(node, result)
+  return result
 }
 
 function imageParagraphs(doc: ProseNode): DecorationSet {
