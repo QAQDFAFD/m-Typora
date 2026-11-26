@@ -1,7 +1,7 @@
 import { commandsCtx, editorViewCtx, type CmdKey } from '@milkdown/kit/core'
 import type { Node as ProseNode, Schema } from '@milkdown/kit/prose/model'
 import { Plugin, PluginKey, TextSelection, type EditorState, type PluginView } from '@milkdown/kit/prose/state'
-import { deleteTable, isInTable, selectedRect, TableMap } from '@milkdown/kit/prose/tables'
+import { deleteTable, goToNextCell, isInTable, selectedRect, TableMap } from '@milkdown/kit/prose/tables'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import {
   addColAfterCommand,
@@ -89,6 +89,26 @@ function tableFromPipeRow(schema: Schema, text: string): ProseNode | null {
     titles.map(() => table_cell.createAndFill({ alignment: 'left' })!)
   )
   return table.create(null, [header, body])
+}
+
+/** Whether `command` can act on the current cell position (`info`). */
+function canRunTableCommand(command: TableCommand, info: TableInfo): boolean {
+  switch (command) {
+    case 'table-row-above':
+      return info.row > 0
+    case 'table-row-up':
+      return info.row > 1
+    case 'table-row-down':
+      return info.row > 0 && info.row < info.map.height - 1
+    case 'table-col-move-left':
+      return info.col > 0
+    case 'table-col-move-right':
+      return info.col < info.map.width - 1
+    case 'table-delete-row':
+      return info.row > 0 && info.map.height > 2
+    default:
+      return true
+  }
 }
 
 /** Runs one Paragraph › Table command. Returns false when the caret is not in a table. */
@@ -219,6 +239,21 @@ export const tableKeymap = $useKeymap('mtyporaTableKeymap', {
     shortcuts: 'Mod-Enter',
     priority: 300,
     command: (ctx) => () => runTableCommand('table-row-below', ctx.get(editorViewCtx), (key, payload) => ctx.get(commandsCtx).call(key, payload))
+  },
+  TabInTable: {
+    shortcuts: 'Tab',
+    priority: 300,
+    command: (ctx) => () => {
+      const view = ctx.get(editorViewCtx)
+      const info = tableInfo(view.state)
+      if (!info) return false
+      if (info.row === info.map.height - 1 && info.col === info.map.width - 1) {
+        ctx.get(commandsCtx).call(addRowAfterCommand.key)
+        focusCell(view, info.tablePos, info.row + 1, 0)
+        return true
+      }
+      return goToNextCell(1)(view.state, view.dispatch)
+    }
   },
   DeleteRow: {
     shortcuts: 'Mod-Shift-Backspace',
@@ -391,8 +426,8 @@ class TableToolbar implements PluginView {
 
   private onClick(event: MouseEvent): void {
     const target = event.target as HTMLElement
-    const button = target.closest<HTMLElement>('button')
-    if (!button) return
+    const button = target.closest<HTMLButtonElement>('button')
+    if (!button || button.disabled) return
     if (button.dataset.cmd) {
       this.closePanel()
       this.run(button.dataset.cmd as TableCommand)
@@ -417,9 +452,12 @@ class TableToolbar implements PluginView {
     this.panelAnchor = this.view.state.selection.from
     this.panel.dataset.kind = kind
     if (kind === 'more') {
-      this.panel.innerHTML = MORE_ITEMS.map((item) =>
-        item ? `<button data-cmd="${item[0]}">${item[1]}</button>` : '<span class="md-table-panel-sep"></span>'
-      ).join('')
+      const info = this.info!
+      this.panel.innerHTML = MORE_ITEMS.map((item) => {
+        if (!item) return '<span class="md-table-panel-sep"></span>'
+        const disabled = canRunTableCommand(item[0], info) ? '' : ' disabled'
+        return `<button data-cmd="${item[0]}"${disabled}>${item[1]}</button>`
+      }).join('')
     } else {
       const { height, width } = this.info!.map
       this.panel.innerHTML = `
@@ -453,6 +491,18 @@ export function createTableToolbar(run: (command: TableCommand) => void) {
         key: new PluginKey('mtypora-table-toolbar'),
         view: (view) => (toolbar = new TableToolbar(view, run)),
         props: {
+          // Wrap each table in a horizontally scrollable container (wider tables scroll instead of squishing columns).
+          nodeViews: {
+            table: () => {
+              const dom = document.createElement('div')
+              dom.className = 'tableWrapper'
+              const table = document.createElement('table')
+              const contentDOM = document.createElement('tbody')
+              table.append(contentDOM)
+              dom.append(table)
+              return { dom, contentDOM }
+            }
+          },
           // Esc in the editor closes an open table panel first.
           handleKeyDown: (_view, event) => {
             if (event.key !== 'Escape' || !toolbar?.isPanelOpen()) return false

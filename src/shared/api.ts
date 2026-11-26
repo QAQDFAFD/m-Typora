@@ -139,6 +139,7 @@ export type MenuCommand =
   // Edit
   | 'undo'
   | 'redo'
+  | 'select-all'
   | 'find'
   | 'find-next'
   | 'find-prev'

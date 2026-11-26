@@ -3,7 +3,9 @@ import { Plugin, PluginKey, TextSelection, type EditorState, type PluginView } f
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { $prose } from '@milkdown/kit/utils'
 
-const key = new PluginKey<boolean>('mtypora-link-editor')
+type LinkMode = { kind: 'edit' } | { kind: 'insert'; pos: number } | null
+
+const key = new PluginKey<LinkMode>('mtypora-link-editor')
 const isMac = /Mac/i.test(navigator.platform)
 
 /** The link run (same href) that contains `pos`, if any. */
@@ -25,18 +27,22 @@ function linkAt(state: EditorState, pos: number): { from: number; to: number; ma
   return found
 }
 
-/** Opens the link editor for the link at the caret (or makes the selection a link first). */
+/** Opens the link editor for the link at the caret, selection, or inserts a new link at the caret. */
 export function openLinkEditor(view: EditorView): boolean {
   const { state } = view
-  const { from, to, empty } = state.selection
+  const { from, to, empty, $from } = state.selection
   const type = state.schema.marks.link
   if (!type) return false
   if (!empty && !linkAt(state, from)) {
-    view.dispatch(state.tr.addMark(from, to, type.create({ href: '' })).setMeta(key, true))
+    view.dispatch(state.tr.addMark(from, to, type.create({ href: '' })).setMeta(key, { kind: 'edit' }))
     return true
   }
-  if (!linkAt(state, from)) return false
-  view.dispatch(state.tr.setMeta(key, true))
+  if (linkAt(state, from)) {
+    view.dispatch(state.tr.setMeta(key, { kind: 'edit' }))
+    return true
+  }
+  if (!empty || !$from.parent.inlineContent || $from.parent.type.spec.code) return false
+  view.dispatch(state.tr.setMeta(key, { kind: 'insert', pos: from }))
   return true
 }
 
@@ -48,6 +54,7 @@ class LinkEditorView implements PluginView {
   private box: HTMLElement
   private input: HTMLInputElement
   private range: { from: number; to: number } | null = null
+  private insertPos: number | null = null
   private attrs: Record<string, unknown> = {}
 
   constructor(private view: EditorView) {
@@ -64,42 +71,57 @@ class LinkEditorView implements PluginView {
       if (event.isComposing || event.keyCode === 229) return
       if (event.key === 'Enter') {
         event.preventDefault()
-        this.commit()
+        event.stopPropagation()
+        this.commit(true)
       } else if (event.key === 'Escape') {
         event.preventDefault()
+        event.stopPropagation()
         this.close(true)
       }
     })
     this.input.addEventListener('blur', () => {
-      if (!this.box.hidden) this.commit()
+      if (!this.box.hidden) this.commit(false)
     })
     view.dom.addEventListener('mouseover', this.onHover)
   }
 
   update(view: EditorView): void {
     this.view = view
-    const open = key.getState(view.state)
-    const link = linkAt(view.state, view.state.selection.from)
-    if (!open || !link) {
-      if (!this.box.hidden && document.activeElement !== this.input) this.box.hidden = true
+    const mode = key.getState(view.state)
+    if (mode?.kind === 'insert') {
+      this.insertPos = mode.pos
+      this.range = null
+      this.attrs = {}
+      if (this.box.hidden) this.openAt('', mode.pos)
       return
     }
+    const link = mode?.kind === 'edit' ? linkAt(view.state, view.state.selection.from) : null
+    if (!link) {
+      if (!this.box.hidden && document.activeElement !== this.input) {
+        this.box.hidden = true
+        this.insertPos = null
+      }
+      return
+    }
+    this.insertPos = null
     this.range = { from: link.from, to: link.to }
     this.attrs = { ...link.mark.attrs }
-    if (this.box.hidden) {
-      this.input.value = String(link.mark.attrs.href ?? '')
-      this.box.hidden = false
-      this.place(link.from)
-      requestAnimationFrame(() => {
-        this.input.focus()
-        this.input.select()
-      })
-    }
+    if (this.box.hidden) this.openAt(String(link.mark.attrs.href ?? ''), link.from)
   }
 
   destroy(): void {
     this.view.dom.removeEventListener('mouseover', this.onHover)
     this.box.remove()
+  }
+
+  private openAt(value: string, pos: number): void {
+    this.input.value = value
+    this.box.hidden = false
+    this.place(pos)
+    requestAnimationFrame(() => {
+      this.input.focus()
+      this.input.select()
+    })
   }
 
   private onHover = (event: MouseEvent): void => {
@@ -120,38 +142,61 @@ class LinkEditorView implements PluginView {
     const zoom = Number.parseFloat(document.documentElement.style.getPropertyValue('--zoom')) || 1
     const coords = this.view.coordsAtPos(pos)
     const hostRect = host.getBoundingClientRect()
-    this.box.style.left = `${(coords.left - hostRect.left) / zoom}px`
+    const maxLeft = Math.max(0, hostRect.width / zoom - (this.box.offsetWidth || 328))
+    const left = Math.max(0, Math.min((coords.left - hostRect.left) / zoom, maxLeft))
+    this.box.style.left = `${left}px`
     this.box.style.top = `${(coords.bottom - hostRect.top) / zoom + 4}px`
   }
 
-  private commit(): void {
-    const range = this.range
+  private commit(refocus: boolean): void {
     const type = this.view.state.schema.marks.link
-    if (!range || !type) return this.close(false)
+    if (!type) return this.close(refocus)
     const href = this.input.value.trim()
+    if (this.insertPos !== null) {
+      const pos = this.insertPos
+      this.insertPos = null
+      if (!href) return this.close(refocus)
+      const { state } = this.view
+      const node = state.schema.text(href, [type.create({ href })])
+      const tr = state.tr.insert(pos, node)
+      tr.setSelection(TextSelection.create(tr.doc, pos + href.length)).removeStoredMark(type).setMeta(key, null)
+      this.box.hidden = true
+      this.view.dispatch(tr)
+      if (refocus) this.view.focus()
+      return
+    }
+    const range = this.range
+    if (!range) return this.close(refocus)
     const tr = this.view.state.tr.removeMark(range.from, range.to, type)
     if (href) tr.addMark(range.from, range.to, type.create({ ...this.attrs, href }))
-    tr.setSelection(TextSelection.create(tr.doc, range.to)).setMeta(key, false)
+    tr.setSelection(TextSelection.create(tr.doc, range.to)).setMeta(key, null)
     this.box.hidden = true
     this.view.dispatch(tr)
-    this.view.focus()
+    if (refocus) this.view.focus()
   }
 
   private close(refocus: boolean): void {
+    this.insertPos = null
     this.box.hidden = true
-    this.view.dispatch(this.view.state.tr.setMeta(key, false))
+    this.view.dispatch(this.view.state.tr.setMeta(key, null))
     if (refocus) this.view.focus()
   }
 }
 
 export const linkEditorPlugin = $prose(
   () =>
-    new Plugin<boolean>({
+    new Plugin<LinkMode>({
       key,
       state: {
-        init: () => false,
-        // Stays open only while the caret remains inside the link being edited.
-        apply: (tr, open, _old, state) => (tr.getMeta(key) as boolean | undefined) ?? (open && linkAt(state, state.selection.from) !== null)
+        init: () => null,
+        // Stays open only while the caret remains inside the link (or insert anchor) being edited.
+        apply: (tr, open, _old, state) => {
+          const next = tr.getMeta(key) as LinkMode | undefined
+          if (next !== undefined) return next
+          if (open?.kind === 'edit') return linkAt(state, state.selection.from) ? open : null
+          if (open?.kind === 'insert') return !tr.docChanged && state.selection.empty && state.selection.from === open.pos ? open : null
+          return null
+        }
       },
       view: (view) => new LinkEditorView(view)
     })

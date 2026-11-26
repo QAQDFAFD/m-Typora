@@ -165,7 +165,7 @@ export function buildMenu(menuActions: MenuActions, themes: Array<Pick<CustomThe
         c('拷贝为 HTML 代码', 'copy-html'),
         { role: 'pasteAndMatchStyle', label: '粘贴为纯文本', accelerator: 'CmdOrCtrl+Shift+V' },
         { type: 'separator' },
-        { role: 'selectAll', label: '全选' },
+        c('全选', 'select-all', 'CmdOrCtrl+A'),
         c('选中当前行/句', 'select-line', 'CmdOrCtrl+L'),
         c('选中当前格式文本', 'select-styled', 'CmdOrCtrl+E'),
         c('选中当前词', 'select-word', 'CmdOrCtrl+D'),
@@ -323,6 +323,16 @@ export function sidebarMenu(target: SidebarMenuTarget, run: (action: SidebarActi
     { type: 'separator' },
     item(revealLabel, 'reveal'),
     item('复制路径', 'copy-path')
+  ])
+}
+
+export function inputContextMenu(flags: Electron.EditFlags): Menu {
+  return Menu.buildFromTemplate([
+    { role: 'cut', label: '剪切', enabled: flags.canCut },
+    { role: 'copy', label: '拷贝', enabled: flags.canCopy },
+    { role: 'paste', label: '粘贴', enabled: flags.canPaste },
+    { type: 'separator' },
+    { role: 'selectAll', label: '全选', enabled: flags.canSelectAll }
   ])
 }
 

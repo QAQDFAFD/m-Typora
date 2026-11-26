@@ -1,8 +1,11 @@
+import { EditorView as CmEditorView } from '@codemirror/view'
+
 type Mermaid = (typeof import('mermaid'))['default']
 
 let mermaidPromise: Promise<Mermaid> | null = null
 let configuredTheme = ''
 let counter = 0
+let refreshSeq = 0
 
 /** Mermaid is large, so it is loaded the first time a diagram is shown. */
 function loadMermaid(): Promise<Mermaid> {
@@ -39,9 +42,11 @@ export function renderDiagramPreview(
   if (language.toLowerCase() !== 'mermaid' || !content.trim()) return null
   void (async () => {
     try {
-      const svg = await renderDiagramSvg(content, dark())
+      const isDark = dark()
+      const svg = await renderDiagramSvg(content, isDark)
       const host = document.createElement('div')
       host.className = 'md-diagram'
+      host.dataset.themeMode = isDark ? 'dark' : 'light'
       host.innerHTML = svg
       apply(host)
     } catch (error) {
@@ -52,4 +57,23 @@ export function renderDiagramPreview(
     }
   })()
   return undefined
+}
+
+/** Re-renders already mounted Mermaid diagrams when switching between light and dark themes. */
+export async function refreshDiagrams(root: ParentNode, dark: boolean): Promise<void> {
+  const seq = ++refreshSeq
+  const mode = dark ? 'dark' : 'light'
+  const hosts = Array.from(root.querySelectorAll<HTMLElement>('.md-diagram'))
+  for (const host of hosts) {
+    if (host.dataset.themeMode === mode) continue
+    const cmDom = host.closest('.milkdown-code-block')?.querySelector<HTMLElement>('.cm-editor')
+    const source = cmDom ? CmEditorView.findFromDOM(cmDom)?.state.doc.toString() : undefined
+    if (!source?.trim()) continue
+    const svg = await renderDiagramSvg(source, dark).catch(() => null)
+    if (seq !== refreshSeq) return
+    if (svg && host.isConnected) {
+      host.innerHTML = svg
+      host.dataset.themeMode = mode
+    }
+  }
 }

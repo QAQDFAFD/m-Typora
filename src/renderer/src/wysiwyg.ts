@@ -1,10 +1,11 @@
+import { selectAll as cmSelectAll } from '@codemirror/commands'
 import type { Extension } from '@codemirror/state'
 import { EditorView as CmEditorView } from '@codemirror/view'
 import { Crepe } from '@milkdown/crepe'
 import { editorViewCtx, schemaCtx, serializerCtx, type CmdKey } from '@milkdown/kit/core'
 import { redo, undo } from '@milkdown/kit/prose/history'
 import { DOMSerializer, type Node as ProseNode } from '@milkdown/kit/prose/model'
-import { NodeSelection, Plugin, PluginKey, Selection, TextSelection } from '@milkdown/kit/prose/state'
+import { AllSelection, NodeSelection, Plugin, PluginKey, Selection, TextSelection } from '@milkdown/kit/prose/state'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import {
   createCodeBlockCommand,
@@ -27,7 +28,7 @@ import type { MenuCommand } from '../../shared/api'
 import { createAutoPairPlugin } from './auto-pair'
 import { codeLanguagePlugin } from './code-language'
 import { codeFenceTheme } from './code-theme'
-import { renderDiagramPreview } from './diagrams'
+import { refreshDiagrams, renderDiagramPreview } from './diagrams'
 import type { CodeBlockSource } from './export'
 import { createExtendedSyntaxPlugin } from './extended-syntax'
 import { createFocusPlugin } from './focus-plugin'
@@ -38,8 +39,8 @@ import { linkEditorPlugin, openLinkEditor } from './link-editor'
 import { linkInputPlugin } from './link-input'
 import { mathInlineEditPlugin } from './math-inline'
 import { configureMarkdown } from './markdown-config'
-import { countPlainText, type TextStats } from './markdown-utils'
-import { searchPlugin } from './search-plugin'
+import { countPlainText, type Heading, type TextStats } from './markdown-utils'
+import { codeBlockSearchHighlight, searchPlugin } from './search-plugin'
 import { syntaxRevealKeymap, syntaxRevealPlugin } from './syntax-reveal'
 import { createTableToolbar, focusTableNear, runTableCommand, tableInfo, tableKeymap, type TableCommand } from './table-tools'
 
@@ -95,7 +96,7 @@ export class WysiwygEditor {
         [Crepe.Feature.CodeMirror]: {
           // Pass null so Crepe's defaultsDeep does not merge oneDark's darkTheme/styles into codeFenceTheme.
           theme: null as unknown as Extension,
-          extensions: [codeFenceTheme, CmEditorView.contentAttributes.of({ spellcheck: 'false' })],
+          extensions: [codeFenceTheme, codeBlockSearchHighlight, CmEditorView.contentAttributes.of({ spellcheck: 'false' })],
           searchPlaceholder: '搜索语言',
           noResultText: '无匹配',
           copyText: '复制',
@@ -239,6 +240,21 @@ export class WysiwygEditor {
     view.focus()
   }
 
+  refreshTheme(): void {
+    void refreshDiagrams(this.options.root, this.options.isDark())
+  }
+
+  /** Top-level headings straight from ProseMirror text (excludes syntax-reveal `.md-meta` decorations). */
+  headings(): Heading[] {
+    const headings: Heading[] = []
+    this.view().state.doc.forEach((node) => {
+      if (node.type.name === 'heading') {
+        headings.push({ level: Number(node.attrs.level), text: node.textContent.trim() || '(空标题)', line: headings.length })
+      }
+    })
+    return headings
+  }
+
   headingElements(): HTMLElement[] {
     return Array.from(this.options.root.querySelectorAll<HTMLElement>('.ProseMirror > :is(h1, h2, h3, h4, h5, h6)'))
   }
@@ -338,6 +354,13 @@ export class WysiwygEditor {
         return undo(view.state, view.dispatch)
       case 'redo':
         return redo(view.state, view.dispatch)
+      case 'select-all': {
+        const cmEl = document.activeElement?.closest<HTMLElement>('.milkdown-code-block .cm-editor')
+        const cm = cmEl ? CmEditorView.findFromDOM(cmEl) : null
+        if (cm) return cmSelectAll(cm)
+        view.dispatch(view.state.tr.setSelection(new AllSelection(view.state.doc)))
+        return true
+      }
       case 'paragraph':
         return call(turnIntoTextCommand.key)
       case 'heading-up': {

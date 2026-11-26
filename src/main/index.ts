@@ -5,7 +5,7 @@ import { existsSync, statSync } from 'node:fs'
 import { basename, dirname, extname, join, resolve, sep } from 'node:path'
 import { hashText, resolveTarget, withPathLock, writeFileAtomic } from './atomic'
 import { deleteDraft, leftoverDrafts, readDraft, writeDraft, type Draft } from './drafts'
-import { buildMenu, contextMenu, setCustomThemes, sidebarMenu, syncMenu, titleMenu } from './menu'
+import { buildMenu, contextMenu, inputContextMenu, setCustomThemes, sidebarMenu, syncMenu, titleMenu } from './menu'
 import { createUntitledFile, createUntitledFolder, readTree, searchFolder } from './files'
 import { exportHtml, exportPdf } from './export'
 import { historyFile, listHistory, moveHistory, pruneHistory, readHistory, snapshot } from './history'
@@ -222,6 +222,12 @@ function createWindow(options: { path?: string; draftId?: string; draft?: Draft 
       event.preventDefault()
       if (/^(https?|mailto):/i.test(url)) shell.openExternal(url)
     }
+  })
+
+  // Provide standard Chinese editing actions for native inputs (find bar, rename, link box, table size, YAML).
+  win.webContents.on('context-menu', (_event, params) => {
+    if (!params.isEditable || params.formControlType === 'none') return
+    inputContextMenu(params.editFlags).popup({ window: win })
   })
 
   win.on('close', (event) => {

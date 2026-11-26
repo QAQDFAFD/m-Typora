@@ -11,10 +11,14 @@ const FENCE_NAMES = new Map(
   })
 )
 
+function focusCodeBody(block: Element | null): void {
+  requestAnimationFrame(() => block?.querySelector<HTMLElement>('.cm-content')?.focus())
+}
+
 /**
  * The language picker stores display names ("Python", "C++"); Typora writes the usual
- * lowercase fence identifiers (```python, ```cpp). Only picker changes are rewritten —
- * a language already written in the file is kept exactly as it is.
+ * lowercase fence identifiers (```python, ```cpp). Also wires Enter/Escape keyboard control
+ * for the language search box and "已复制" feedback on the copy button.
  */
 export const codeLanguagePlugin = $prose(
   () =>
@@ -33,6 +37,67 @@ export const codeLanguagePlugin = $prose(
           })
         })
         return tr.docChanged ? tr : null
+      },
+      view(view) {
+        const timers = new WeakMap<HTMLButtonElement, number>()
+        const pending = new Set<number>()
+
+        const onKeyDown = (event: KeyboardEvent) => {
+          if (event.isComposing || event.keyCode === 229) return
+          const target = event.target as HTMLElement | null
+          const search = target?.closest<HTMLInputElement>('.milkdown-code-block .list-wrapper .search-input')
+          if (!search) return
+          const block = search.closest('.milkdown-code-block')
+          if (event.key === 'Enter') {
+            event.preventDefault()
+            event.stopPropagation()
+            const first = search.closest('.list-wrapper')?.querySelector<HTMLElement>('.language-list-item')
+            if (first) {
+              first.click()
+              focusCodeBody(block)
+            }
+          } else if (event.key === 'Escape') {
+            event.preventDefault()
+            event.stopPropagation()
+            block?.querySelector<HTMLElement>('.language-button[data-expanded="true"]')?.click()
+            focusCodeBody(block)
+          }
+        }
+
+        const onClick = (event: MouseEvent) => {
+          const btn = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>('.milkdown-code-block .copy-button')
+          if (!btn) return
+          const textNode = Array.from(btn.childNodes).find((node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim())
+          if (!textNode) return
+          btn.dataset.copyLabel ??= textNode.textContent ?? '复制'
+          textNode.textContent = '已复制'
+          btn.classList.add('copied')
+          const prev = timers.get(btn)
+          if (prev !== undefined) {
+            window.clearTimeout(prev)
+            pending.delete(prev)
+          }
+          const timer = window.setTimeout(() => {
+            pending.delete(timer)
+            if (btn.isConnected && btn.dataset.copyLabel !== undefined) {
+              textNode.textContent = btn.dataset.copyLabel
+              btn.classList.remove('copied')
+            }
+          }, 1500)
+          timers.set(btn, timer)
+          pending.add(timer)
+        }
+
+        view.dom.addEventListener('keydown', onKeyDown, true)
+        view.dom.addEventListener('click', onClick)
+        return {
+          destroy() {
+            view.dom.removeEventListener('keydown', onKeyDown, true)
+            view.dom.removeEventListener('click', onClick)
+            for (const timer of pending) window.clearTimeout(timer)
+            pending.clear()
+          }
+        }
       }
     })
 )

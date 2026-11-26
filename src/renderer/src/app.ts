@@ -271,8 +271,22 @@ export class App {
       case 'undo':
       case 'redo':
         if (this.isTypingInField()) return void document.execCommand(command)
-        this.activeEditor().exec(command)
+        if (this.isModalOpen()) return
+        if (!this.activeEditor().exec(command) && this.mode === 'wysiwyg') {
+          if (command === 'undo') this.frontMatter.undo()
+          else this.frontMatter.redo()
+        }
         return
+      case 'select-all': {
+        const active = document.activeElement
+        if (active instanceof HTMLInputElement || (active instanceof HTMLTextAreaElement && !active.closest('.cm-editor'))) {
+          active.select()
+          return
+        }
+        if (this.isTypingInField() || this.isModalOpen()) return void document.execCommand('selectAll')
+        this.activeEditor().exec('select-all')
+        return
+      }
       case 'find':
       case 'replace':
         if (this.mode === 'source') return void this.source?.exec(command)
@@ -291,9 +305,9 @@ export class App {
         await navigator.clipboard.writeText(this.mode === 'source' && this.source ? this.source.selectedText() : this.wysiwyg.selectionAs().html)
         return
       case 'front-matter':
-        if (this.mode === 'source') return
+        if (this.mode === 'source' || this.isModalOpen()) return
         if (this.frontMatter.get() === null) {
-          this.frontMatter.set('')
+          this.frontMatter.set('', false)
           this.onContentChange()
         }
         return this.frontMatter.focus()
@@ -326,8 +340,8 @@ export class App {
         return this.updatePrefs({ zoom: 1 })
 
       default:
-        // ⌘Enter / ⇧⌘⌫ are table accelerators; never let them act while typing in a field.
-        if (command.startsWith('table-') && this.isTypingInField()) return
+        // Never let editor/table shortcuts mutate the document while typing in another field or modal.
+        if (this.isTypingInField() || this.isModalOpen()) return
         // Paragraph and Format commands go to whichever editor is visible.
         this.activeEditor().exec(command)
     }
@@ -355,9 +369,27 @@ export class App {
     return this.sourcePromise
   }
 
+  private isModalOpen(): boolean {
+    return Boolean(document.querySelector('.overlay:not([hidden])'))
+  }
+
+  private hasEscapeTargetOpen(): boolean {
+    return Boolean(
+      document.querySelector(
+        '.overlay:not([hidden]), .md-table-panel:not([hidden]), .md-link-editor:not([hidden]), .milkdown-latex-inline-edit[data-show="true"], .md-image-source:not([hidden]), .milkdown-code-block [data-expanded="true"], #title.renaming, .sidebar-rename-input, #source .cm-search'
+      )
+    )
+  }
+
   private isTypingInField(): boolean {
     const active = document.activeElement
-    return active instanceof HTMLInputElement || (active instanceof HTMLTextAreaElement && !active.closest('.cm-editor'))
+    return (
+      active instanceof HTMLInputElement ||
+      (active instanceof HTMLTextAreaElement && !active.closest('.cm-editor')) ||
+      (active instanceof HTMLElement &&
+        active.isContentEditable &&
+        (!active.closest('#wysiwyg, #source') || Boolean(active.closest('.milkdown-latex-inline-edit'))))
+    )
   }
 
   // --------------------------------------------------------------- documents
@@ -888,11 +920,7 @@ export class App {
 
   private currentHeadings(markdown: string): Heading[] {
     if (this.mode === 'source') return extractHeadings(markdown)
-    return this.wysiwyg.headingElements().map((el, index) => ({
-      level: Number(el.tagName.slice(1)),
-      text: el.textContent?.trim() || '(空标题)',
-      line: index
-    }))
+    return this.wysiwyg.headings()
   }
 
   private revealHeading(index: number): void {
@@ -1002,6 +1030,7 @@ export class App {
 
   private applyPrefs(): void {
     const { root, prefs } = this
+    const prevDark = this.themeMeta.dark
     root.dataset.theme = prefs.theme
     root.dataset.imageAlign = prefs.imageAlign
     this.applyCustomTheme(prefs.theme.startsWith('custom:') ? (this.customThemes.find((theme) => theme.id === prefs.theme)?.css ?? '') : null)
@@ -1017,6 +1046,7 @@ export class App {
       background: getComputedStyle(document.body).backgroundColor,
       dark: getComputedStyle(this.root).colorScheme.includes('dark')
     }
+    if (this.themeMeta.dark !== prevDark) this.wysiwyg.refreshTheme()
     if (this.sidebar.getView() !== prefs.sidebarView) this.sidebar.setView(prefs.sidebarView)
     this.wysiwyg.setSpellcheck(prefs.spellcheck)
     if (isDesktop && this.lastSpellcheckSent !== prefs.spellcheck) {
@@ -1272,11 +1302,30 @@ export class App {
     })
     if (isDesktop) {
       document.addEventListener('contextmenu', (event) => {
-        if (!(event.target as HTMLElement).closest('#wysiwyg, #source')) return
+        const target = event.target as HTMLElement
+        if (!target.closest('#wysiwyg, #source') || (target.closest('input, textarea') && !target.closest('.cm-content'))) return
         event.preventDefault()
         bridge.showContextMenu(this.activeEditor().hasSelection(), this.mode === 'wysiwyg' && this.wysiwyg.inTable())
       })
     }
+
+    // Track whether a modal or inline popup handled Escape before it bubbled to document
+    // (ProseMirror unconditionally calls preventDefault on Escape, so check openness directly).
+    let escapeBlocked = false
+    document.addEventListener(
+      'keydown',
+      (event) => {
+        if (event.key === 'Escape') escapeBlocked = this.hasEscapeTargetOpen()
+      },
+      true
+    )
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && !event.isComposing && !escapeBlocked && this.findBar.isOpen()) {
+        event.preventDefault()
+        this.closeFindBar()
+      }
+      escapeBlocked = false
+    })
 
     // The status bar fades in on mouse movement and hides while typing.
     window.addEventListener('mousemove', () => this.revealFooter(), { passive: true })

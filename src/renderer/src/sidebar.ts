@@ -40,17 +40,16 @@ function disclosure(hasChildren: boolean, collapsed: boolean, toggle?: number): 
   return `<span class="disclosure${collapsed ? '' : ' expanded'}"${attrs}>${ICONS.chevron}</span>`
 }
 
-/** Relative time in the short English form Typora's article list uses. */
+/** Relative time in localized Chinese matching history-dialog.ts. */
 function relativeTime(mtime: number | undefined): string {
   if (!mtime) return ''
   const seconds = Math.max(0, (Date.now() - mtime) / 1000)
-  const unit = (value: number, name: string) => `${value} ${name}${value === 1 ? '' : 's'} ago`
-  if (seconds < 60) return 'just now'
-  if (seconds < 3600) return unit(Math.floor(seconds / 60), 'minute')
-  if (seconds < 86400) return unit(Math.floor(seconds / 3600), 'hour')
-  if (seconds < 86400 * 30) return unit(Math.floor(seconds / 86400), 'day')
-  if (seconds < 86400 * 365) return unit(Math.floor(seconds / (86400 * 30)), 'month')
-  return unit(Math.floor(seconds / (86400 * 365)), 'year')
+  if (seconds < 60) return '刚刚'
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟前`
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} 小时前`
+  if (seconds < 86400 * 30) return `${Math.floor(seconds / 86400)} 天前`
+  if (seconds < 86400 * 365) return `${Math.floor(seconds / (86400 * 30))} 个月前`
+  return `${Math.floor(seconds / (86400 * 365))} 年前`
 }
 
 function flattenFiles(nodes: TreeNode[], parent: string): Array<TreeNode & { folder: string }> {

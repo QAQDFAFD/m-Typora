@@ -383,6 +383,11 @@
   font: 12px var(--ui-font);
 }
 
+#write .milkdown-code-block .tools .tools-button-group button.copied {
+  color: var(--accent-color);
+  border-color: var(--accent-color);
+}
+
 #write .milkdown-code-block .list-wrapper {
   font-family: var(--ui-font);
   background: var(--popover-bg-color);
@@ -402,14 +407,15 @@
 
 /* --------------------------------------------------------------- tables */
 
-/* prosemirror-tables wraps each table; wide tables scroll sideways like in Typora. */
+/* tableWrapper wraps each table; wide tables scroll sideways like in Typora. */
 #write .tableWrapper {
-  margin: 0.8em 0;
+  margin: 16px 0 0.8em;
   overflow-x: auto;
 }
 
 #write table {
   width: 100%;
+  table-layout: auto;
   /* Typora's gap above a table (measured), which the 16px table toolbar fits into. */
   margin: 16px 0 0.8em;
   border-collapse: collapse;
@@ -421,7 +427,7 @@
 
 #write th,
 #write td {
-  min-width: 32px;
+  min-width: 72px;
   padding: 6px 13px;
   border: 1px solid var(--table-border-color);
   vertical-align: top;
@@ -432,6 +438,7 @@
 #write th p,
 #write td p {
   margin: 0;
+  min-width: 46px;
 }
 
 /* Column widths are not part of Markdown, so the resize grip is not offered. */
@@ -527,6 +534,12 @@
   justify-content: flex-start;
   height: 26px;
   padding: 0 10px;
+}
+
+.md-table-panel button:disabled {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
 }
 
 .md-table-panel input {
@@ -740,10 +753,54 @@
 }
 
 .source .cm-panels {
-  background: var(--bg-color);
+  background: var(--side-bar-bg-color);
   color: var(--text-color);
   border-color: var(--sidebar-border-color);
   font-family: var(--ui-font);
+}
+
+.source .cm-panel.cm-search {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+.source .cm-panel.cm-search input:not([type='checkbox']),
+.source .cm-panel.cm-search button {
+  padding: 3px 8px;
+  border: 1px solid var(--sidebar-border-color);
+  border-radius: 4px;
+  background: var(--bg-color);
+  background-image: none;
+  color: var(--text-color);
+  font: inherit;
+}
+
+.source .cm-panel.cm-search input:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.source .cm-panel.cm-search button:hover {
+  background: var(--item-hover-bg-color);
+}
+
+.source .cm-panel.cm-search button[name='close'] {
+  border: 0;
+  background: transparent;
+  color: var(--meta-text-color);
+  padding: 2px 6px;
+}
+
+.source .cm-panel.cm-search label {
+  color: var(--control-text-color);
+}
+
+.source .cm-searchMatch {
+  background: var(--search-hit-bg);
+}
+
+.source .cm-searchMatch-selected {
+  background: var(--search-current-bg);
 }
 
 @media print {

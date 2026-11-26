@@ -60,6 +60,7 @@ body { margin: 0; }
 #write .md-toc a { color: inherit; text-decoration: none; }
 @media print {
   #write { max-width: none; padding: 0; }
+  #write .tableWrapper { overflow: visible; }
   #write .milkdown-code-block, #write table, #write img, #write .md-diagram, #write .md-math-block { break-inside: avoid; }
   #write :is(h1, h2, h3, h4, h5, h6) { break-after: avoid; }
 }

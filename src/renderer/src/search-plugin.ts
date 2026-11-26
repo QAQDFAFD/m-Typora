@@ -1,13 +1,12 @@
+import { StateEffect, StateField, type Extension } from '@codemirror/state'
+import { Decoration as CmDecoration, type DecorationSet as CmDecorationSet, EditorView as CmEditorView } from '@codemirror/view'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import { Plugin, PluginKey, TextSelection, type EditorState } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
 import { $prose } from '@milkdown/kit/utils'
+import { findTextMatches, type SearchQuery } from './search-match'
 
-export interface SearchQuery {
-  text: string
-  caseSensitive: boolean
-  wholeWord: boolean
-}
+export { findTextMatches, type SearchQuery } from './search-match'
 
 interface Match {
   from: number
@@ -20,17 +19,40 @@ interface SearchState {
   current: number
 }
 
+interface CodeSearchRange {
+  from: number
+  to: number
+  current: boolean
+}
+
 const searchKey = new PluginKey<SearchState>('mtypora-search')
 const EMPTY: SearchState = { query: { text: '', caseSensitive: false, wholeWord: false }, matches: [], current: -1 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
+const setCodeSearchHighlights = StateEffect.define<CodeSearchRange[]>()
+const hitMark = CmDecoration.mark({ class: 'md-search-hit' })
+const currentHitMark = CmDecoration.mark({ class: 'md-search-hit md-search-current' })
+
+const codeSearchField = StateField.define<CmDecorationSet>({
+  create: () => CmDecoration.none,
+  update(decorations, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(setCodeSearchHighlights)) {
+        const items = effect.value
+          .filter((item) => item.from < item.to && item.to <= tr.state.doc.length)
+          .map((item) => (item.current ? currentHitMark : hitMark).range(item.from, item.to))
+        return CmDecoration.set(items, true)
+      }
+    }
+    return tr.docChanged ? decorations.map(tr.changes) : decorations
+  },
+  provide: (field) => CmEditorView.decorations.from(field)
+})
+
+/** Highlights ProseMirror find-bar matches inside nested CodeMirror code fences. */
+export const codeBlockSearchHighlight: Extension = codeSearchField
 
 function findMatches(doc: ProseNode, query: SearchQuery): Match[] {
   if (!query.text) return []
-  const source = query.wholeWord ? `\\b${escapeRegExp(query.text)}\\b` : escapeRegExp(query.text)
-  const pattern = new RegExp(source, query.caseSensitive ? 'gu' : 'giu')
   const matches: Match[] = []
   doc.descendants((node, pos) => {
     if (!node.isTextblock) return true
@@ -43,10 +65,9 @@ function findMatches(doc: ProseNode, query: SearchQuery): Match[] {
         text += child.text
       }
     })
-    for (const found of text.matchAll(pattern)) {
-      if (found[0].length === 0) continue
-      const from = offsets[found.index!]
-      const to = offsets[found.index! + found[0].length - 1] + 1
+    for (const found of findTextMatches(text, query)) {
+      const from = offsets[found.index]
+      const to = offsets[found.index + found.length - 1] + 1
       matches.push({ from, to })
     }
     return false
@@ -58,6 +79,13 @@ function nearest(matches: Match[], pos: number): number {
   if (matches.length === 0) return -1
   const index = matches.findIndex((match) => match.from >= pos)
   return index === -1 ? 0 : index
+}
+
+function codeEditorAt(view: EditorView, pos: number): CmEditorView | null {
+  const dom = view.nodeDOM(pos)
+  if (!(dom instanceof HTMLElement)) return null
+  const cmDom = dom.matches('.cm-editor') ? dom : dom.querySelector<HTMLElement>('.cm-editor')
+  return cmDom ? CmEditorView.findFromDOM(cmDom) : null
 }
 
 export const searchPlugin = $prose(
@@ -75,7 +103,9 @@ export const searchPlugin = $prose(
           if (meta?.current !== undefined) return { ...value, current: meta.current }
           if (tr.docChanged && value.query.text) {
             const matches = findMatches(state.doc, value.query)
-            return { ...value, matches, current: Math.min(value.current, matches.length - 1) }
+            const current =
+              matches.length === 0 ? -1 : value.current < 0 ? nearest(matches, state.selection.from) : Math.min(value.current, matches.length - 1)
+            return { ...value, matches, current }
           }
           return value
         }
@@ -84,12 +114,46 @@ export const searchPlugin = $prose(
         decorations(state) {
           const { matches, current } = searchKey.getState(state) ?? EMPTY
           if (matches.length === 0) return DecorationSet.empty
-          return DecorationSet.create(
-            state.doc,
-            matches.map((match, index) =>
-              Decoration.inline(match.from, match.to, { class: index === current ? 'md-search-hit md-search-current' : 'md-search-hit' })
-            )
-          )
+          const ranges: Decoration[] = []
+          for (let index = 0; index < matches.length; index++) {
+            const match = matches[index]
+            // Nested CodeMirror blocks draw their own highlights via codeBlockSearchHighlight.
+            if (state.doc.resolve(match.from).parent.type.name === 'code_block') continue
+            ranges.push(Decoration.inline(match.from, match.to, { class: index === current ? 'md-search-hit md-search-current' : 'md-search-hit' }))
+          }
+          return ranges.length > 0 ? DecorationSet.create(state.doc, ranges) : DecorationSet.empty
+        }
+      },
+      view: () => {
+        const synced = new WeakMap<CmEditorView, string>()
+        let hasActiveCodeHits = false
+        return {
+          update(view) {
+            const { matches, current } = searchKey.getState(view.state) ?? EMPTY
+            if (matches.length === 0 && !hasActiveCodeHits) return
+            let active = false
+            view.state.doc.descendants((node, pos) => {
+              if (node.type.name !== 'code_block') return !node.isTextblock
+              const cm = codeEditorAt(view, pos)
+              if (!cm) return false
+              const start = pos + 1
+              const end = start + node.content.size
+              const hits: CodeSearchRange[] = []
+              for (let i = 0; i < matches.length; i++) {
+                const m = matches[i]
+                if (m.from >= start && m.to <= end) hits.push({ from: m.from - start, to: m.to - start, current: i === current })
+              }
+              if (hits.length > 0) active = true
+              const signature = hits.map((h) => `${h.from}:${h.to}:${h.current ? 1 : 0}`).join(',')
+              const prev = synced.get(cm) ?? ''
+              if (prev !== signature) {
+                synced.set(cm, signature)
+                cm.dispatch({ effects: setCodeSearchHighlights.of(hits) })
+              }
+              return false
+            })
+            hasActiveCodeHits = active
+          }
         }
       }
     })
@@ -109,6 +173,18 @@ export function clearSearch(view: EditorView): void {
 }
 
 function reveal(view: EditorView, match: Match): void {
+  const $from = view.state.doc.resolve(match.from)
+  if ($from.parent.type.name === 'code_block') {
+    const pos = $from.before()
+    const dom = view.nodeDOM(pos)
+    if (dom instanceof HTMLElement) dom.scrollIntoView({ block: 'center' })
+    const cm = codeEditorAt(view, pos)
+    if (cm) {
+      const local = Math.max(0, Math.min(match.from - (pos + 1), cm.state.doc.length))
+      cm.dispatch({ effects: CmEditorView.scrollIntoView(local, { y: 'center' }) })
+    }
+    return
+  }
   const node = view.domAtPos(match.from).node
   const element = node instanceof HTMLElement ? node : node.parentElement
   element?.scrollIntoView({ block: 'center' })

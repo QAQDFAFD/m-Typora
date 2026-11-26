@@ -2172,6 +2172,281 @@ try {
     expect((await active()).startsWith('DIV.ProseMirror'), `focus ${await active()}`)
     expect((await rows())[0] === '指标|数值||', `row0 changed on Esc: ${JSON.stringify(await rows())}`)
   })
+
+  await test('U9', '全场景回归 P0：快捷键隔离、代码块全选、查找增强、深色主题与宽表格滚动', async () => {
+    const dispatchKey = async (key, code, vk, text) => {
+      await app.main(`
+        const dbg = win.webContents.debugger
+        if (!dbg.isAttached()) dbg.attach('1.3')
+        await dbg.sendCommand('Input.dispatchKeyEvent', {
+          type: 'keyDown',
+          key: ${JSON.stringify(key)},
+          code: ${JSON.stringify(code)},
+          windowsVirtualKeyCode: ${vk},
+          nativeVirtualKeyCode: ${vk},
+          ...(${JSON.stringify(text ?? null)} ? { text: ${JSON.stringify(text ?? '')}, unmodifiedText: ${JSON.stringify(text ?? '')} } : {})
+        })
+        await dbg.sendCommand('Input.dispatchKeyEvent', {
+          type: 'keyUp',
+          key: ${JSON.stringify(key)},
+          code: ${JSON.stringify(code)},
+          windowsVirtualKeyCode: ${vk},
+          nativeVirtualKeyCode: ${vk}
+        })
+        return true
+      `)
+      await sleep(120)
+    }
+
+    // 1) Shortcuts in table resize input & FindBar must not mutate editor
+    await openFresh('# Title\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\nParagraph.\n')
+    await app.clickText('B', 1, '#write table')
+    await app.click('.md-table-toolbar [data-action="resize"]')
+    await app.click('.md-table-panel input[name="rows"]')
+    const snapBefore = await q(`document.querySelector('#write .ProseMirror').innerText`)
+    await app.menu('delete-line')
+    await app.menu('heading-1')
+    expect((await q(`document.querySelector('#write .ProseMirror').innerText`)) === snapBefore, 'table input shortcut leaked into editor')
+    expect((await count('#write table')) === 1, 'table deleted while focused in table input')
+    await app.click('#write p')
+    await app.menu('find')
+    await app.type('Paragraph')
+    await app.menu('heading-2')
+    await app.menu('delete-line')
+    expect((await count('#write h2')) === 0, 'Cmd+2 mutated heading while in FindBar')
+    expect((await q(`document.querySelector('#write .ProseMirror').innerText`)).includes('Paragraph'), 'delete-line deleted editor block from FindBar')
+    await app.click('#findbar [data-action="close"]')
+
+    // 2) Code block select-all selects only the code block
+    await openFresh('Outside before.\n\n```js\nline1\nline2\n```\n\nOutside after.\n')
+    await sleep(300)
+    await app.click('#write .milkdown-code-block .cm-line', 'line1')
+    await app.menu('select-all')
+    const cbSel = await q(`({
+      bgs: document.querySelectorAll('#write .milkdown-code-block .cm-selectionBackground').length,
+      winSel: window.getSelection()?.toString() ?? ''
+    })`)
+    expect(cbSel.bgs > 0, 'code block select-all created no CM selection')
+    expect(!cbSel.winSel.includes('Outside before') && !cbSel.winSel.includes('Outside after'), `select-all leaked outside code block: ${JSON.stringify(cbSel.winSel)}`)
+    await app.clickText('Outside after', 2)
+    await app.menu('select-all')
+    const docSel = await q(`window.getSelection()?.toString() ?? ''`)
+    expect(docSel.includes('Outside before') && docSel.includes('Outside after'), `doc select-all missed content: ${JSON.stringify(docSel)}`)
+
+    // 3) FindBar: code block highlights, CJK wholeWord, 0/1 fix, Esc from editor
+    await openFresh('Para needle.\n\n```js\nconst needle = 1\n```\n\n测试一下 中文测试。\n')
+    await sleep(300)
+    await app.clickText('Para', 1)
+    await app.menu('find')
+    await app.type('needle')
+    await sleep(140)
+    expect((await q(`document.querySelector('.find-count').textContent`)) === '1 / 2', `find count ${await q(`document.querySelector('.find-count').textContent`)}`)
+    expect((await count('#write .milkdown-code-block .md-search-hit')) === 1, 'missing code block search highlight')
+    await app.key('Enter')
+    await sleep(100)
+    expect((await q(`document.querySelector('.find-count').textContent`)) === '2 / 2', 'step to code block failed')
+    expect((await count('#write .milkdown-code-block .md-search-current')) === 1, 'missing code block current highlight')
+    await app.click('.find-input')
+    await app.key('A', ['meta'])
+    await app.type('测试')
+    await app.click('[data-toggle="word"]')
+    await sleep(140)
+    expect((await q(`document.querySelector('.find-count').textContent`)) === '1 / 2', `CJK wholeWord failed: ${await q(`document.querySelector('.find-count').textContent`)}`)
+    await app.click('[data-toggle="word"]')
+    await app.click('.find-input')
+    await app.key('A', ['meta'])
+    await app.type('zzz')
+    await sleep(120)
+    expect((await q(`document.querySelector('.find-count').textContent`)) === '无结果', 'expected 无结果')
+    await app.clickText('Para', 0)
+    await app.type('zzz ')
+    await sleep(140)
+    expect((await q(`document.querySelector('.find-count').textContent`)) === '1 / 1', `expected 1 / 1 after typing match, got ${await q(`document.querySelector('.find-count').textContent`)}`)
+    await dispatchKey('Escape', 'Escape', 27)
+    expect(!(await visible('#findbar')), 'Esc in editor did not close FindBar')
+
+    // 4) Night theme Mermaid live refresh + Source Mode search localization & dark theme
+    await openFresh('# Diagram\n\n```mermaid\ngraph LR\n  A[Start] --> B[End]\n```\n')
+    await sleep(700)
+    const lightMermaid = await q(`({ mode: document.querySelector('#write .md-diagram')?.dataset.themeMode, svg: document.querySelector('#write .md-diagram svg')?.outerHTML })`)
+    expect(lightMermaid.mode === 'light' && !!lightMermaid.svg, 'light mermaid not rendered')
+    try {
+      await app.clickMenuItem('theme-night')
+      await sleep(700)
+      const darkMermaid = await q(`({ mode: document.querySelector('#write .md-diagram')?.dataset.themeMode, svg: document.querySelector('#write .md-diagram svg')?.outerHTML })`)
+      expect(darkMermaid.mode === 'dark' && darkMermaid.svg !== lightMermaid.svg, 'mermaid did not re-render for Night theme')
+
+      await app.menu('toggle-source')
+      await sleep(250)
+      await app.menu('find')
+      await sleep(150)
+      const cmSearch = await q(`(() => {
+        const panel = document.querySelector('#source .cm-panel.cm-search')
+        const btn = panel?.querySelector('button[name="next"]')
+        return { text: panel?.innerText ?? '', btnBg: btn ? getComputedStyle(btn).backgroundColor : null }
+      })()`)
+      expect(cmSearch.text.includes('下一个') && cmSearch.text.includes('区分大小写'), `source search not localized: ${cmSearch.text}`)
+      expect(cmSearch.btnBg === 'rgb(54, 59, 64)', `source search button bg ${cmSearch.btnBg}`)
+      await app.key('Escape')
+      await app.menu('toggle-source')
+      await sleep(200)
+    } finally {
+      await app.clickMenuItem('theme-github')
+    }
+
+    // 5) Wide 12-col table scrolls horizontally in narrow window
+    await openFresh('| C1 | C2 | C3 | C4 | C5 | C6 | C7 | C8 | C9 | C10 | C11 | C12 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| LongCellContent01 | Col2 | Col3 | Col4 | Col5 | Col6 | Col7 | Col8 | Col9 | Col10 | Col11 | Col12 |\n')
+    const wasSidebar = await q(`document.documentElement.classList.contains('sidebar-open')`)
+    try {
+      if (!wasSidebar) await app.menu('toggle-sidebar')
+      await app.main(`win.setSize(680, 720); return true`)
+      await sleep(250)
+      await app.clickText('Col2', 1, '#write table')
+      const wide = await q(`(() => {
+        const wrap = document.querySelector('#write .tableWrapper')
+        const th = document.querySelector('#write th')
+        const tb = document.querySelector('.md-table-toolbar')
+        return {
+          hasWrap: !!wrap,
+          scrollW: wrap?.scrollWidth ?? 0,
+          clientW: wrap?.clientWidth ?? 0,
+          thW: th ? Math.round(th.getBoundingClientRect().width) : 0,
+          tbRight: tb ? Math.round(tb.getBoundingClientRect().right) : 0,
+          wrapRight: wrap ? Math.round(wrap.getBoundingClientRect().right) : 0
+        }
+      })()`)
+      expect(wide.hasWrap && wide.scrollW > wide.clientW, `wide table did not scroll: ${JSON.stringify(wide)}`)
+      expect(wide.thW >= 60, `table column crushed: ${wide.thW}px`)
+      expect(wide.tbRight <= wide.wrapRight + 2, `toolbar overflowed wrapper: ${JSON.stringify(wide)}`)
+    } finally {
+      await app.main(`win.setSize(1180, 800); return true`)
+      if (!wasSidebar) await app.menu('toggle-sidebar')
+      await sleep(200)
+    }
+  })
+
+  await test('U10', '全场景回归 P1/P2：表格Tab、禁用项、代码块键盘、无选区链接、源码命令与细节打磨', async () => {
+    const dispatchKey = async (key, code, vk, text) => {
+      await app.main(`
+        const dbg = win.webContents.debugger
+        if (!dbg.isAttached()) dbg.attach('1.3')
+        await dbg.sendCommand('Input.dispatchKeyEvent', {
+          type: 'keyDown',
+          key: ${JSON.stringify(key)},
+          code: ${JSON.stringify(code)},
+          windowsVirtualKeyCode: ${vk},
+          nativeVirtualKeyCode: ${vk},
+          ...(${JSON.stringify(text ?? null)} ? { text: ${JSON.stringify(text ?? '')}, unmodifiedText: ${JSON.stringify(text ?? '')} } : {})
+        })
+        await dbg.sendCommand('Input.dispatchKeyEvent', {
+          type: 'keyUp',
+          key: ${JSON.stringify(key)},
+          code: ${JSON.stringify(code)},
+          windowsVirtualKeyCode: ${vk},
+          nativeVirtualKeyCode: ${vk}
+        })
+        return true
+      `)
+      await sleep(120)
+    }
+
+    // 1) Last cell Tab inserts new row instead of spaces; header More menu disables row-above/up/down/delete-row
+    await openFresh(TABLE)
+    await app.clickText('4', 1, '#write table')
+    await app.key('Tab')
+    expect((await rows()).length === 4, `Tab at last cell rows=${(await rows()).length}`)
+    expect((await rows())[2] === '3|4', `Tab inserted spaces: ${JSON.stringify(await rows())}`)
+    await app.clickText('a', 1, '#write table')
+    await app.click('.md-table-toolbar [data-action="more"]')
+    const dis = await q(`Object.fromEntries([...document.querySelectorAll('.md-table-panel button[data-cmd]')].map(b => [b.dataset.cmd, b.disabled]))`)
+    expect(dis['table-row-above'] && dis['table-row-up'] && dis['table-row-down'] && dis['table-delete-row'], `header disabled wrong: ${JSON.stringify(dis)}`)
+    expect(!dis['table-row-below'] && !dis['table-col-left'], 'valid actions disabled on header')
+
+    // 2) Code block language picker Enter/Escape & Copy feedback
+    await openFresh('```js\nconst a = 1\n```\n')
+    await sleep(300)
+    await app.click('#write .milkdown-code-block .cm-line')
+    await app.click('#write .milkdown-code-block .language-button')
+    await app.click('#write .milkdown-code-block .list-wrapper .search-input')
+    await app.type('rust')
+    await dispatchKey('Enter', 'Enter', 13, '\r')
+    await sleep(150)
+    expect((await q(`document.querySelector('#write .milkdown-code-block .language-button')?.textContent?.trim()`)) === 'rust', 'Enter did not pick rust')
+    await app.click('#write .milkdown-code-block .language-button')
+    await app.click('#write .milkdown-code-block .list-wrapper .search-input')
+    await dispatchKey('Escape', 'Escape', 27)
+    expect((await q(`document.querySelector('#write .milkdown-code-block .language-button')?.dataset.expanded`)) === 'false', 'Esc did not close language picker')
+    await app.click('#write .milkdown-code-block .copy-button')
+    await sleep(80)
+    expect((await q(`document.querySelector('#write .milkdown-code-block .copy-button')?.textContent?.trim()`)) === '已复制', 'copy button did not show 已复制')
+    expect((await app.main(`return electron.clipboard.readText()`)) === 'const a = 1', 'copy did not write clipboard')
+
+    // 3) Outline excludes syntax-reveal .md-meta
+    await openFresh('# H **bold** end\n')
+    await app.menu('view-outline')
+    await sleep(150)
+    await app.clickText('bold', 2, '#write h1')
+    await app.type('X')
+    await sleep(200)
+    const outlineText = await q(`document.querySelector('.outline-item')?.textContent?.trim()`)
+    expect(!outlineText?.includes('*'), `outline leaked .md-meta: ${outlineText}`)
+
+    // 4) Empty-selection Cmd+K inserts link cleanly
+    await openFresh('Hello  world.\n')
+    await app.clickText('Hello  world.', 6)
+    await app.menu('link')
+    await sleep(100)
+    expect(await visible('.md-link-editor'), 'empty-selection Cmd+K did not open link editor')
+    await app.type('https://a.b')
+    await dispatchKey('Enter', 'Enter', 13, '\r')
+    expect((await q(`document.querySelector('#write a')?.getAttribute('href')`)) === 'https://a.b', 'empty-selection link not inserted')
+
+    // 5) Source mode editing shortcuts
+    await openFresh('Alpha\n')
+    await app.menu('toggle-source')
+    await sleep(250)
+    await app.click('#source .cm-line')
+    await app.menu('quote')
+    expect((await q(`document.querySelector('#source .cm-content')?.innerText?.trim()`)) === '> Alpha', 'source quote failed')
+    await app.menu('quote')
+    await app.menu('bullet-list')
+    expect((await q(`document.querySelector('#source .cm-content')?.innerText?.trim()`)) === '- Alpha', 'source bullet-list failed')
+    await app.menu('delete-line')
+    expect((await q(`document.querySelector('#source .cm-content')?.innerText?.trim()`)) === '', 'source delete-line failed')
+    await app.menu('toggle-source')
+    await sleep(200)
+
+    // 6) Empty YAML front matter & undo
+    await openFresh('---\n---\n\n# Body\n')
+    expect((await q(`document.querySelector('#front-matter').hidden`)) === false, 'empty front-matter not recognized')
+    expect((await html('#write h1'))[0] === 'Body', 'heading missing after empty front matter')
+    await openFresh('# Plain\n')
+    await app.menu('front-matter')
+    await app.clickText('Plain', 1)
+    await app.menu('undo')
+    expect((await q(`document.querySelector('#front-matter').hidden`)) === true, 'Cmd+Z did not undo newly inserted front matter')
+
+    // 7) Chinese relative time, opaque footer background, and input context menu
+    const folder = join(docs, 'u10-folder')
+    await mkdir(folder, { recursive: true })
+    await writeFile(join(folder, 'note.md'), '# Note\n')
+    await app.answer('open', folder)
+    await app.menu('open-folder')
+    await app.answer('open', null)
+    await app.menu('view-articles')
+    await sleep(250)
+    const metaText = await q(`document.querySelector('.article-meta')?.textContent ?? ''`)
+    expect(/刚刚|分钟前|小时前|天前|个月前|年前/.test(metaText), `article time not Chinese: ${metaText}`)
+    const footerBg = await q(`getComputedStyle(document.querySelector('#footer')).backgroundColor`)
+    expect(footerBg !== 'rgba(0, 0, 0, 0)' && footerBg !== 'transparent', `footer bg transparent: ${footerBg}`)
+    await app.menu('find')
+    const inpRect = await app.rect('.find-input')
+    await app.clickAt(inpRect.x, inpRect.y, { button: 'right' })
+    await sleep(150)
+    const inputMenu = JSON.stringify(await app.lastPopupLabels())
+    expect(inputMenu.includes('剪切') && inputMenu.includes('粘贴') && inputMenu.includes('全选'), `missing input context menu: ${inputMenu}`)
+    await app.click('#findbar [data-action="close"]')
+  })
 } finally {
   const errors = app.logs
     .join('')
