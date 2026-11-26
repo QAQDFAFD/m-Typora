@@ -1,3 +1,4 @@
+import type { Extension } from '@codemirror/state'
 import { EditorView as CmEditorView } from '@codemirror/view'
 import { Crepe } from '@milkdown/crepe'
 import { editorViewCtx, schemaCtx, serializerCtx, type CmdKey } from '@milkdown/kit/core'
@@ -92,8 +93,9 @@ export class WysiwygEditor {
         // Native caret like Typora; keep only the drop / gap cursors.
         [Crepe.Feature.Cursor]: { virtual: false, color: '#9fb8e8', width: 2 },
         [Crepe.Feature.CodeMirror]: {
-          theme: codeFenceTheme,
-          extensions: [CmEditorView.contentAttributes.of({ spellcheck: 'false' })],
+          // Pass null so Crepe's defaultsDeep does not merge oneDark's darkTheme/styles into codeFenceTheme.
+          theme: null as unknown as Extension,
+          extensions: [codeFenceTheme, CmEditorView.contentAttributes.of({ spellcheck: 'false' })],
           searchPlaceholder: '搜索语言',
           noResultText: '无匹配',
           copyText: '复制',

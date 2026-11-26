@@ -341,6 +341,11 @@
   display: none;
 }
 
+#write .milkdown-code-block .cm-selectionBackground,
+#write .milkdown-code-block .cm-focused .cm-selectionBackground {
+  background: var(--select-text-bg-color) !important;
+}
+
 /* The language picker sits in the bottom-right corner and appears only while editing. */
 #write .milkdown-code-block .tools {
   position: absolute;

@@ -2069,6 +2069,39 @@ try {
     expect((await q(`document.querySelector('.find-count').textContent`)) === '2 / 2', 'real Enter did not step find')
     await app.key('Escape')
   })
+
+  await test('U7', '代码块选中高亮跟随主题，不再变黑', async () => {
+    await openFresh('```bash\ngit fetch origin\ngit switch -c branch origin/master\nadmin/src/line1\nadmin/src/line2\nadmin/src/line3\n```\n')
+    await sleep(350)
+    const selectLines = async () => {
+      const r1 = await app.rect('#write .milkdown-code-block .cm-line', 'admin/src/line1')
+      const r2 = await app.rect('#write .milkdown-code-block .cm-line', 'admin/src/line3')
+      await app.drag({ x: r1.left + 10, y: r1.y }, { x: r2.left + 80, y: r2.y })
+      await sleep(150)
+      return q(`(() => {
+        const ed = document.querySelector('#write .milkdown-code-block .cm-editor')
+        const bgs = [...ed.querySelectorAll('.cm-selectionBackground')]
+        return {
+          count: bgs.length,
+          bg: bgs[0] ? getComputedStyle(bgs[0]).backgroundColor : null,
+          caret: getComputedStyle(ed.querySelector('.cm-content')).caretColor
+        }
+      })()`)
+    }
+    try {
+      const light = await selectLines()
+      expect(light.count >= 2, `light selection count ${light.count}`)
+      expect(light.bg === 'rgb(181, 214, 252)', `light selection bg ${light.bg}`)
+      expect(light.caret !== 'rgb(255, 255, 255)', `oneDark caret leaked: ${light.caret}`)
+
+      await app.clickMenuItem('theme-night')
+      const dark = await selectLines()
+      expect(dark.count >= 2, `dark selection count ${dark.count}`)
+      expect(dark.bg === 'rgb(74, 137, 220)', `dark selection bg ${dark.bg}`)
+    } finally {
+      await app.clickMenuItem('theme-github')
+    }
+  })
 } finally {
   const errors = app.logs
     .join('')

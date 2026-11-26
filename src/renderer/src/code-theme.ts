@@ -37,7 +37,10 @@ const chrome = EditorView.theme({
   '.cm-gutters': { display: 'none' },
   '&.cm-focused': { outline: 'none' },
   '.cm-activeLine': { backgroundColor: 'transparent' },
-  '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': { backgroundColor: 'var(--select-text-bg-color)' }
+  '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground': {
+    backgroundColor: 'var(--select-text-bg-color)'
+  },
+  '.cm-selectionMatch': { backgroundColor: 'rgba(128, 128, 128, 0.22)' }
 })
 
 export const codeFenceTheme = [chrome, syntaxHighlighting(codeHighlightStyle)]
