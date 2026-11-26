@@ -2102,6 +2102,76 @@ try {
       await app.clickMenuItem('theme-github')
     }
   })
+
+  await test('U8', '表格调整行列按回车保留当前单元格内容', async () => {
+    const dispatchKey = async (key, code, vk, text) => {
+      await app.main(`
+        const dbg = win.webContents.debugger
+        if (!dbg.isAttached()) dbg.attach('1.3')
+        await dbg.sendCommand('Input.dispatchKeyEvent', {
+          type: 'keyDown',
+          key: ${JSON.stringify(key)},
+          code: ${JSON.stringify(code)},
+          windowsVirtualKeyCode: ${vk},
+          nativeVirtualKeyCode: ${vk},
+          ...(${JSON.stringify(text ?? null)} ? { text: ${JSON.stringify(text ?? '')}, unmodifiedText: ${JSON.stringify(text ?? '')} } : {})
+        })
+        await dbg.sendCommand('Input.dispatchKeyEvent', {
+          type: 'keyUp',
+          key: ${JSON.stringify(key)},
+          code: ${JSON.stringify(code)},
+          windowsVirtualKeyCode: ${vk},
+          nativeVirtualKeyCode: ${vk}
+        })
+        return true
+      `)
+      await sleep(120)
+    }
+    const realEnter = () => dispatchKey('Enter', 'Enter', 13, '\r')
+    const realEscape = () => dispatchKey('Escape', 'Escape', 27)
+
+    await openFresh('# 0. 概况\n\n| 指标 | 数值 |\n| --- | --- |\n| 分支自身提交 | 36 个 |\n| 改动文件 | 84 个 |\n| 分支落后 master | 241 个提交 |\n')
+    await app.clickText('数值', 2, '#write table')
+    await app.click('.md-table-toolbar [data-action="resize"]')
+    await app.click('.md-table-panel input[name="rows"]')
+    await app.key('A', ['meta'])
+    await app.type('5')
+    await realEnter()
+    let st = await tableState()
+    expect(st.size === '5 × 2', `size ${st.size}`)
+    expect(st.panel === null, 'panel still open after rows Enter')
+    expect(await inTable(), 'caret not in table after rows Enter')
+    expect((await rows())[0] === '指标|数值', `row0 cleared: ${JSON.stringify(await rows())}`)
+    expect((await rows())[1] === '分支自身提交|36 个', `row1 changed: ${JSON.stringify(await rows())}`)
+
+    await app.click('.md-table-toolbar [data-action="resize"]')
+    await app.click('.md-table-panel input[name="cols"]')
+    await app.key('A', ['meta'])
+    await app.type('3')
+    await realEnter()
+    st = await tableState()
+    expect(st.size === '5 × 3', `size ${st.size}`)
+    expect((await rows())[0] === '指标|数值|', `row0 cleared on cols Enter: ${JSON.stringify(await rows())}`)
+
+    await app.clickText('36 个', 2, '#write table')
+    await app.click('.md-table-toolbar [data-action="resize"]')
+    await app.click('.md-table-panel input[name="cols"]')
+    await app.key('A', ['meta'])
+    await app.type('4')
+    await realEnter()
+    st = await tableState()
+    expect(st.size === '5 × 4', `size ${st.size}`)
+    expect((await rows())[1] === '分支自身提交|36 个||', `body cell cleared on cols Enter: ${JSON.stringify(await rows())}`)
+
+    await app.clickText('数值', 2, '#write table')
+    await app.click('.md-table-toolbar [data-action="resize"]')
+    await app.click('.md-table-panel input[name="rows"]')
+    await realEscape()
+    st = await tableState()
+    expect(st.panel === null, 'panel still open after Esc')
+    expect((await active()).startsWith('DIV.ProseMirror'), `focus ${await active()}`)
+    expect((await rows())[0] === '指标|数值||', `row0 changed on Esc: ${JSON.stringify(await rows())}`)
+  })
 } finally {
   const errors = app.logs
     .join('')

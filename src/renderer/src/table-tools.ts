@@ -429,8 +429,15 @@ class TableToolbar implements PluginView {
       this.panel.querySelectorAll('input').forEach((input) =>
         input.addEventListener('keydown', (event) => {
           if (event.isComposing || event.keyCode === 229) return
-          if (event.key === 'Enter') this.panel.querySelector<HTMLElement>('[data-action="apply-size"]')!.click()
-          if (event.key === 'Escape') this.closePanel(true)
+          if (event.key === 'Enter') {
+            event.preventDefault()
+            event.stopPropagation()
+            this.panel.querySelector<HTMLElement>('[data-action="apply-size"]')!.click()
+          } else if (event.key === 'Escape') {
+            event.preventDefault()
+            event.stopPropagation()
+            this.closePanel(true)
+          }
         })
       )
     }
